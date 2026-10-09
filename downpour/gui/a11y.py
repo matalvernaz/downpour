@@ -30,9 +30,14 @@ findings:
 * `wx.CheckListBox` exposes NO children at all - a screen reader sees an empty
   list. It is unusable and must never appear in this program.
 
-* Expected, still to be measured here: a virtual ``wx.ListCtrl``
-  (LC_VIRTUAL) repaints without raising name-change events, so live progress
-  figures should never make the screen reader chatter.
+* Measured in Downpour: a virtual ``wx.ListCtrl`` (LC_VIRTUAL) refreshed
+  twice a second during a live download raised no WinEvents at all in nine
+  seconds, so changing progress figures cannot make a screen reader chatter.
+  Its rows still expose a name plus one Text child per column.
+
+* Measured in Downpour: a custom Accessible must answer GetName only for
+  childId 0. Answering for every child renamed all items of a ListBox to the
+  box's own name. A ListBox is named by the StaticText before it anyway.
 """
 
 from __future__ import annotations
@@ -48,6 +53,10 @@ class _NamedAccessible(wx.Accessible):
         self._name = name
 
     def GetName(self, childId):  # noqa: N802 - wx API casing
+        # Only the control itself. Answering for children too renamed every
+        # item of a ListBox to the box's own name (measured in Downpour).
+        if childId != wx.ACC_SELF:
+            return (wx.ACC_NOT_IMPLEMENTED, "")
         return (wx.ACC_OK, self._name)
 
 

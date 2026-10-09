@@ -20,6 +20,18 @@ def app_dir() -> Path:
     return Path(__file__).resolve().parent.parent.parent
 
 
+def resource_dir() -> Path:
+    """The ``downpour`` package folder, holding sounds and vendor files.
+
+    PyInstaller unpacks bundled data under ``sys._MEIPASS``; the build puts
+    those files under a ``downpour`` folder there to keep this one rule.
+    """
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        return Path(base) / "downpour"
+    return Path(__file__).resolve().parent.parent
+
+
 def data_dir() -> Path:
     override = os.environ.get("DOWNPOUR_HOME")
     if override:

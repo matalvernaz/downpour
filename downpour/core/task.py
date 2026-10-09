@@ -32,7 +32,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from downpour.core import checksum, filenames, net, winutil
+from downpour.core import checksum, net, winutil
 from downpour.core import segments as seglib
 from downpour.core.limiter import RateLimiter
 from downpour.core.models import Download, Status
@@ -220,7 +220,7 @@ class HttpTask:
         dl.mime = info.mime or dl.mime
         dl.etag, dl.last_modified = info.etag, info.last_modified
         if not (dl.filename_fixed and dl.filename):
-            dl.filename = self._pick_name(info)
+            dl.filename = net.pick_name(info, dl.url)
         folder = Path(dl.directory) if dl.directory else settings.folder_for(dl.filename)
         folder.mkdir(parents=True, exist_ok=True)
         final = self.engine.claim_path(dl, folder / dl.filename)
@@ -244,17 +244,6 @@ class HttpTask:
             dl.id, dl.filename, format_size(size), "resumable" if dl.resumable else "not resumable",
         )
         return dl.segments[0], resp, info
-
-    def _pick_name(self, info: net.ResponseInfo) -> str:
-        if info.filename:
-            return filenames.sanitize(info.filename)
-        # The URL after redirects usually names the real file; fall back to
-        # the original link when the final one is an opaque token.
-        for url in (info.url, self.dl.url):
-            name = filenames.choose(url, None, info.mime)
-            if os.path.splitext(name)[1]:
-                return name
-        return filenames.choose(info.url, None, info.mime)
 
     def _connection_limit(self) -> int:
         n = self.dl.connections or self.engine.settings.max_connections

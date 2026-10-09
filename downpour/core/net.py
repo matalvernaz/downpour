@@ -247,6 +247,68 @@ def open_range(
     return resp, response_info(resp)
 
 
+def pick_name(info: ResponseInfo, original_url: str) -> str:
+    """The file name for a response: the server's, else the URL's."""
+    if info.filename:
+        return filenames.sanitize(info.filename)
+    # The URL after redirects usually names the real file; fall back to the
+    # original link when the final one is an opaque token.
+    for url in (info.url, original_url):
+        name = filenames.choose(url, None, info.mime)
+        if "." in name.strip("."):
+            return name
+    return filenames.choose(info.url, None, info.mime)
+
+
+@dataclass
+class Probe:
+    filename: str
+    size: int | None
+    mime: str
+    resumable: bool
+    final_url: str
+
+
+def probe(
+    url: str,
+    *,
+    cookies: list[dict] | None = None,
+    referrer: str = "",
+    user_agent: str = "",
+    headers: dict[str, str] | None = None,
+    username: str = "",
+    password: str = "",
+    proxy_mode: str = "system",
+    proxy_url: str = "",
+    timeout: float = 15.0,
+) -> Probe:
+    """Ask the server about a file without downloading it.
+
+    Requests a single byte rather than using HEAD, which many download
+    servers answer wrongly or not at all.
+    """
+    opener = build_opener(
+        url=url, cookies=cookies, username=username, password=password,
+        proxy_mode=proxy_mode, proxy_url=proxy_url,
+    )
+    kwargs = dict(user_agent=user_agent, referrer=referrer, headers=headers, timeout=timeout)
+    try:
+        resp, info = open_range(opener, url, start=0, end=1, **kwargs)
+    except HttpError as e:
+        if e.status != 416:
+            raise
+        resp, info = open_range(opener, url, start=None, **kwargs)  # an empty file
+    resp.close()
+    size = info.total if info.ranged else info.length
+    return Probe(
+        filename=pick_name(info, url),
+        size=size,
+        mime=info.mime,
+        resumable=size is not None and (info.ranged or info.accept_ranges),
+        final_url=info.url,
+    )
+
+
 def abort(resp: object) -> None:
     """Unblock a thread stuck reading ``resp`` by shutting its socket down.
 
@@ -261,6 +323,10 @@ def abort(resp: object) -> None:
         socket.socket.shutdown(sock, socket.SHUT_RDWR)
     except (OSError, TypeError):
         pass
+
+
+def host_of(url: str) -> str:
+    return urlsplit(url).hostname or ""
 
 
 def safe_url(url: str) -> str:
