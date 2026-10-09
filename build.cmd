@@ -4,7 +4,7 @@ REM Needs the dev tools:  py -3 -m pip install pyinstaller wxPython
 setlocal
 cd /d "%~dp0"
 set PY=.venv\Scripts\python.exe
-if not exist %PY% set PY=py -3
+if not exist %PY% set PY=python
 taskkill /IM Downpour.exe /F >nul 2>&1
 taskkill /IM downpour-cli.exe /F >nul 2>&1
 if not exist downpour\vendor\nvdaControllerClient.dll %PY% tools\fetch_nvda_client.py || exit /b 1
