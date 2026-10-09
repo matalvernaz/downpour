@@ -1,0 +1,19 @@
+[project]
+name = "downpour"
+dynamic = ["version"]
+description = "An accessible, open-source download manager for Windows"
+requires-python = ">=3.12"
+readme = "README.md"
+
+[project.optional-dependencies]
+gui = ["wxPython>=4.2"]
+media = ["yt-dlp"]
+dev = ["pytest", "pyinstaller", "wxPython>=4.2"]
+
+[tool.setuptools.dynamic]
+version = { attr = "downpour.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
