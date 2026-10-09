@@ -8,7 +8,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 
 def payload(size: int, seed: int = 1) -> bytes:
@@ -53,7 +53,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802
         state: Server = self.server.state  # type: ignore[attr-defined]
-        path = urlsplit(self.path).path
+        path = unquote(urlsplit(self.path).path)
         with state.lock:
             state.requests.append(Request(path, self.headers.get("Range"), dict(self.headers)))
             spec = state.files.get(path)

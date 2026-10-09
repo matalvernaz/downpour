@@ -10,7 +10,7 @@ from dataclasses import fields
 
 import wx
 
-from downpour.core import paths
+from downpour.core import media, paths
 from downpour.core.settings import Category, Settings
 from downpour.core.units import format_size, parse_size
 from downpour.gui import forms
@@ -43,6 +43,7 @@ class OptionsDialog(wx.Dialog):
         self._saving()
         self._browser()
         self._scheduler()
+        self._media()
         outer.Add(self.book, 1, wx.EXPAND | wx.ALL, 6)
         forms.buttons(self, outer, [(wx.ID_OK, "OK"), (wx.ID_CANCEL, "Cancel")], default=wx.ID_OK)
         self.SetSizer(outer)
@@ -227,6 +228,60 @@ class OptionsDialog(wx.Dialog):
             p, sz, "&When all downloads finish:", [label for _, label in WHEN_DONE], _index(WHEN_DONE, s.when_done)
         )
 
+    def _media(self):
+        p, sz = self._page("Media")
+        s = self.s
+        labels = [c.label for c in media.PRESETS]
+        default = next((i for i, c in enumerate(media.PRESETS) if c.key == s.media_format), 0)
+        self.media_format = forms.choice(p, sz, "Default &quality for video and audio:", labels, default)
+        self.tool_status = forms.readonly(p, sz, "&Helper programs:", self._tool_text(), lines=3)
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        for label, handler in (
+            ("Install or &update yt-dlp", self._ytdlp_button),
+            ("Install &FFmpeg", self._ffmpeg_button),
+        ):
+            b = wx.Button(p, label=label)
+            b.Bind(wx.EVT_BUTTON, handler)
+            row.Add(b, 0, wx.RIGHT, 6)
+        sz.Add(row, 0, wx.ALL, 6)
+        self.ytdlp_path = forms.text(p, sz, "yt-dlp &program (leave empty to find it automatically):", s.ytdlp_path)
+        self.ffmpeg_path = forms.text(p, sz, "FFmpeg program or f&older (leave empty to find it automatically):", s.ffmpeg_path)
+
+    def _tool_text(self) -> str:
+        ytdlp = media.find_ytdlp(self.s)
+        ffmpeg = media.find_ffmpeg(self.s)
+        return "\n".join([
+            f"yt-dlp: {ytdlp or 'not installed'}",
+            f"FFmpeg: {ffmpeg or 'not installed (needed for the best video quality and MP3)'}",
+        ])
+
+    def _ytdlp_button(self, evt):
+        from downpour.gui.media_dialog import run_with_progress
+
+        path = media.find_ytdlp(self.s)
+        if path:
+            finished, result = run_with_progress(self, "Updating yt-dlp", "Checking for a newer yt-dlp...",
+                                                 lambda progress, stop: media.update_ytdlp(path))
+            if finished:
+                forms.message(self, str(result) or "yt-dlp has been checked.", title="yt-dlp update")
+        else:
+            finished, result = run_with_progress(self, "Installing yt-dlp", "Downloading yt-dlp:", media.install_ytdlp)
+            if finished and isinstance(result, BaseException):
+                forms.message(self, f"Installing yt-dlp failed: {result}", icon=wx.ICON_ERROR)
+        self.tool_status.SetValue(self._tool_text())
+        self.tool_status.SetFocus()
+
+    def _ffmpeg_button(self, evt):
+        from downpour.gui.media_dialog import run_with_progress
+
+        if media.find_ffmpeg(self.s) and not forms.confirm(self, "FFmpeg is already available. Download Downpour's own copy anyway?"):
+            return
+        finished, result = run_with_progress(self, "Installing FFmpeg", "Downloading FFmpeg:", media.install_ffmpeg)
+        if finished and isinstance(result, BaseException):
+            forms.message(self, f"Installing FFmpeg failed: {result}", icon=wx.ICON_ERROR)
+        self.tool_status.SetValue(self._tool_text())
+        self.tool_status.SetFocus()
+
     # -- saving ---------------------------------------------------------------
 
     def _fail(self, page: int, ctrl: wx.Window, text: str) -> None:
@@ -276,6 +331,9 @@ class OptionsDialog(wx.Dialog):
         s.schedule_stop = stop
         s.schedule_days = [i for i, cb in enumerate(self.days) if cb.GetValue()]
         s.when_done = WHEN_DONE[self.when_done.GetSelection()][0]
+        s.media_format = media.PRESETS[self.media_format.GetSelection()].key
+        s.ytdlp_path = self.ytdlp_path.GetValue().strip()
+        s.ffmpeg_path = self.ffmpeg_path.GetValue().strip()
         s.categories = [Category(c.name, c.extensions, c.folder) for c in s.categories]
         for f in fields(Settings):
             setattr(self.live, f.name, getattr(s, f.name))

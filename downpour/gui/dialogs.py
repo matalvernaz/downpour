@@ -79,13 +79,13 @@ def folder_for_category(settings: Settings, name: str) -> str:
 class AddUrlDialog(wx.Dialog):
     """Ask for an address. Pre-filled with a link from the clipboard."""
 
-    def __init__(self, parent: wx.Window | None, initial: str = ""):
-        super().__init__(parent, title="Add download")
+    def __init__(self, parent: wx.Window | None, initial: str = "", title: str = "Add download", label: str = "&Address:"):
+        super().__init__(parent, title=title)
         sizer = wx.BoxSizer(wx.VERTICAL)
         if not initial:
             found = urls_in(clipboard_text())
             initial = found[0] if found else ""
-        self.address = forms.text(self, sizer, "&Address:", initial)
+        self.address = forms.text(self, sizer, label, initial)
         self.address.SetMinSize((520, -1))
         forms.buttons(self, sizer, [(wx.ID_OK, "OK"), (wx.ID_CANCEL, "Cancel")], default=wx.ID_OK)
         self.SetSizerAndFit(sizer)

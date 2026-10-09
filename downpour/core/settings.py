@@ -97,7 +97,8 @@ class Settings:
     schedule_days: list[int] = field(default_factory=lambda: list(range(7)))  # 0 = Monday
 
     # Media (yt-dlp)
-    media_format: str = "best"
+    media_format: str = "best-mp4"
+    ytdlp_path: str = ""
     ffmpeg_path: str = ""
 
     def effective_speed_limit(self) -> int:

@@ -37,8 +37,10 @@ from downpour.gui.dialogs import (
     item_to_download,
     urls_in,
 )
+from downpour.core import media
 from downpour.gui.feedback import Feedback
 from downpour.gui.main_frame import MainFrame
+from downpour.gui.media_dialog import MediaDialog, media_format_value, run_with_progress
 from downpour.gui.options_dialog import OptionsDialog
 from downpour.gui.tray import TrayIcon, make_icon
 
@@ -148,7 +150,13 @@ class Controller:
             wx.CallAfter(self.add_items, items, bool(msg.get("pick")))
             return {"ok": True}
         if kind == "media":
-            return {"ok": False, "error": "Grabbing video and audio from pages is not built yet."}
+            page = msg.get("page")
+            if not isinstance(page, dict) or not str(page.get("url", "")).lower().startswith(("http://", "https://")):
+                return {"ok": False, "error": "media needs a page with an http or https url"}
+            cookies = [c for c in page.get("cookies") or [] if isinstance(c, dict)]
+            wx.CallAfter(self.grab_media, str(page["url"]), cookies, str(page.get("userAgent") or ""),
+                         str(page.get("referrer") or ""))
+            return {"ok": True}
         return {"ok": False, "error": f"unknown request type {kind!r}"}
 
     def wants(self, item: dict) -> bool:
@@ -306,6 +314,78 @@ class Controller:
                 continue
         self.feedback.play("added")
         self.feedback.say(f"{added} downloads added" + ("" if start else ", paused"))
+
+    # -- video and audio ----------------------------------------------------------
+
+    def grab_media(self, url: str | None = None, cookies: list[dict] | None = None,
+                   user_agent: str = "", referrer: str = "") -> None:
+        def show():
+            page = url
+            if page is None:
+                with AddUrlDialog(self._parent(), title="Grab video or audio", label="Page &address:") as dlg:
+                    if self._modal(dlg) != wx.ID_OK:
+                        return
+                    page = dlg.urls[0]
+            if not self.ensure_ytdlp():
+                return
+            with MediaDialog(self._parent(), self.settings, page, cookies, user_agent, referrer) as dlg:
+                if self._modal(dlg) != wx.ID_OK:
+                    return
+                chosen, filename, directory = dlg.chosen, dlg.filename, dlg.directory
+                start, playlist, info = dlg.start_now, dlg.playlist, dlg.info
+            if chosen.needs_ffmpeg and not media.find_ffmpeg(self.settings):
+                self.ensure_ffmpeg(optional=True)
+            if playlist and info is not None:
+                if chosen.key.startswith("id:"):
+                    chosen = media.PRESETS[0]  # format ids differ from item to item
+                items = [(u, media.suggested_name(media.MediaInfo(url=u, title=t, ext=info.ext), chosen), t)
+                         for u, t in info.entries]
+            else:
+                items = [(page, filename, info.title if info else "")]
+            for item_url, name, title in items:
+                dl = Download(
+                    url=item_url, kind="media", media_format=media_format_value(chosen),
+                    filename=name, filename_fixed=True, directory=directory, description=title,
+                    cookies=cookies or [], user_agent=user_agent, referrer=referrer,
+                )
+                self.engine.add(dl, start=start, force=start and not playlist)
+            self.feedback.play("added")
+            if len(items) > 1:
+                self.feedback.say(f"{len(items)} items added")
+
+        self._queue_dialog(show)
+
+    def ensure_ytdlp(self) -> bool:
+        if media.find_ytdlp(self.settings):
+            return True
+        if not forms.confirm(
+            self._parent(),
+            "Downpour uses the free yt-dlp program to grab video and audio from over a thousand sites. "
+            "Download the official copy from GitHub now (about 18 MB)?",
+        ):
+            return False
+        return self._install("Installing yt-dlp", "Downloading yt-dlp:", media.install_ytdlp)
+
+    def ensure_ffmpeg(self, optional: bool = False) -> bool:
+        if media.find_ffmpeg(self.settings):
+            return True
+        question = ("Joining separate video and audio streams needs the free FFmpeg program. "
+                    "Download it from GitHub now (about 85 MB)?")
+        if optional:
+            question += " If you choose No, Downpour gets the best single file instead, which may be lower quality."
+        if not forms.confirm(self._parent(), question):
+            return False
+        return self._install("Installing FFmpeg", "Downloading FFmpeg:", media.install_ffmpeg)
+
+    def _install(self, title: str, message: str, installer) -> bool:
+        finished, result = run_with_progress(self._parent(), title, message, installer)
+        if not finished:
+            return False
+        if isinstance(result, BaseException):
+            forms.message(self._parent(), f"{title} failed: {result}", icon=wx.ICON_ERROR)
+            return False
+        self.feedback.say(f"{title.replace('Installing', '').strip()} is installed")
+        return True
 
     # -- other dialogs ----------------------------------------------------------
 

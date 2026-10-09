@@ -37,6 +37,7 @@ Ctrl+I: speak the progress of the selected download
 Anywhere in the main window
 Ctrl+N: add a download
 Ctrl+Shift+V: add every link on the clipboard
+Ctrl+M: grab video or audio from a page
 Ctrl+B: batch download
 Ctrl+O: open the file
 Ctrl+E: open the containing folder
@@ -133,6 +134,7 @@ class MainFrame(wx.Frame):
         tasks = wx.Menu()
         self._item(tasks, "&Add download...\tCtrl+N", lambda e: c.add_url_dialog())
         self._item(tasks, "Add links from the &clipboard\tCtrl+Shift+V", lambda e: c.add_from_clipboard())
+        self._item(tasks, "&Grab video or audio...\tCtrl+M", lambda e: c.grab_media())
         self._item(tasks, "&Batch download...\tCtrl+B", lambda e: c.batch_dialog())
         self._item(tasks, "&Import links from a text file...", lambda e: c.import_links())
         tasks.AppendSeparator()
