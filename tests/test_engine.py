@@ -319,3 +319,15 @@ def test_rejects_non_http(make_engine):
     engine = make_engine()
     with pytest.raises(ValueError):
         engine.add(Download(url="file:///C:/Windows/win.ini"))
+
+
+def test_empty_replies_fail_instead_of_looping(server, make_engine, fast_retry):
+    data = payload(1024 * 1024)
+    url = server.add("/empty-ranges.bin", data, empty_ranges=True, delay=0.002)
+    engine = make_engine(max_connections=4, max_retries=3)
+    dl = add(engine, url)
+    done = wait_for(engine, dl.id, {Status.COMPLETED, Status.FAILED}, timeout=30)
+    # The first connection can still finish everything on its own; either way
+    # the download must end rather than spin on empty replies.
+    if done.status == Status.COMPLETED:
+        assert read(done.path) == data

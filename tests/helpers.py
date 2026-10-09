@@ -31,6 +31,7 @@ class FileSpec:
     refuse_status: int = 503
     drop_after: int | None = None  # cut one connection after this many bytes
     redirect_to: str | None = None
+    empty_ranges: bool = False  # answer ranged requests after the first with no bytes
 
 
 @dataclass
@@ -112,6 +113,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             if spec.max_range:
                 end = min(end, start + spec.max_range)
+            if spec.empty_ranges and start > 0:
+                end = start
             status = 206
         self.send_response(status)
         self.send_header("Content-Type", spec.content_type)

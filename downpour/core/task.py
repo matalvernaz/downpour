@@ -435,7 +435,7 @@ class HttpTask:
                         return DONE
                 if self._stop.is_set():
                     return BROKEN
-                if expected is not None and got >= expected and self.dl.resumable:
+                if got and expected is not None and got >= expected and self.dl.resumable:
                     return MORE
                 self._note_failure(ConnectionResetError("the server closed the connection early"))
                 return BROKEN
