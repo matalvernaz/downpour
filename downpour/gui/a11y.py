@@ -3,6 +3,7 @@
 Carried over from CleanSweep, where everything here was verified against the
 live MSAA tree on Windows 11 with wxPython 4.3.1 / wxWidgets 3.3.3 by launching
 each control and reading back what the accessibility layer exposed. The
+scripts that took Downpour's own measurements are in tools/a11y. The
 findings:
 
 * `wx.CheckBox` and `wx.Button` expose their *label* as the accessible name.
