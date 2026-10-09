@@ -86,6 +86,7 @@ class Controller:
         self._dialogs: collections.deque = collections.deque()
         self._dialog_busy = False
         self._exiting = False
+        self._awaiting_refresh: int | None = None  # download waiting for a fresh link
         self.clipboard = ClipboardWatcher(self)
         self._schedule_marks: dict[str, str] = {}
         self.timer = wx.Timer()
@@ -162,6 +163,8 @@ class Controller:
     def wants(self, item: dict) -> bool:
         """Should Downpour take this download from the browser?"""
         s = self.settings
+        if self._awaiting_refresh is not None and self._refresh_match(item_to_download(item)) is not None:
+            return True  # the user is renewing an expired link, whatever the file type
         if not s.browser_capture:
             return False
         url = str(item.get("finalUrl") or item.get("url"))
@@ -272,9 +275,38 @@ class Controller:
         else:
             self._queue_dialog(lambda: self._pick(downloads))
 
+    def wait_for_new_address(self, dl: Download) -> None:
+        """IDM's "refresh download address": the next matching download the
+        browser hands over renews this one's link instead of starting again."""
+        self._awaiting_refresh = dl.id
+        self.engine.pause([dl.id])
+        forms.message(
+            self._parent(),
+            f"Now go to the page {dl.display_name()} came from and start the download again in your browser. "
+            "Downpour will take the new address and resume where it stopped.",
+            title="Refresh address",
+        )
+
+    def _refresh_match(self, fresh: Download) -> Download | None:
+        target = self.engine.get(self._awaiting_refresh) if self._awaiting_refresh else None
+        if target is None:
+            return None
+        same_name = fresh.filename and fresh.filename.lower() == (target.filename or "").lower()
+        same_size = fresh.size is not None and fresh.size == target.size
+        return target if (same_name or same_size) else None
+
     def offer(self, item: dict, interactive: bool = False) -> None:
         """A single download arrived from the browser, the clipboard or the user."""
         dl = item_to_download(item)
+        target = self._refresh_match(dl)
+        if target is not None:
+            self._awaiting_refresh = None
+            target.cookies = dl.cookies or target.cookies
+            target.referrer = dl.referrer or target.referrer
+            self.engine.refresh_url(target.id, dl.url)
+            self.engine.start([target.id])
+            self.feedback.say(f"New address received. Resuming {target.display_name()}")
+            return
         existing = self.engine.find_url(dl.url)
         if existing is not None and existing.status != Status.COMPLETED:
             self.engine.start([existing.id])

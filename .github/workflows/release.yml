@@ -1,0 +1,33 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install tools
+        run: python -m pip install pyinstaller wxPython pytest pytest-timeout yt-dlp
+      - name: Tests
+        run: python -m pytest --timeout=120
+      - name: Build
+        shell: cmd
+        run: build.cmd
+      - name: Package
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/Downpour -DestinationPath Downpour-windows.zip
+          (Get-FileHash Downpour-windows.zip -Algorithm SHA256).Hash.ToLower() + "  Downpour-windows.zip" | Out-File -Encoding ascii Downpour-windows.zip.sha256
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create ${{ github.ref_name }} Downpour-windows.zip Downpour-windows.zip.sha256 --title "Downpour ${{ github.ref_name }}" --generate-notes --prerelease

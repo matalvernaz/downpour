@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # Windows only by design: sparse files, DPAPI, named pipes, the Mark of
+    # the Web and the GUI are all Win32, so a Linux job would test nothing.
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install test tools
+        run: python -m pip install pytest pytest-timeout yt-dlp
+      - name: Core and command line import no wx
+        run: python -c "import sys, downpour.core.engine, downpour.core.media, downpour.cli.main; sys.exit(1 if 'wx' in sys.modules else 0)"
+      - name: Tests
+        run: python -m pytest --timeout=120
+
+  build:
+    runs-on: windows-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install build tools
+        run: python -m pip install pyinstaller wxPython
+      - name: Build
+        shell: cmd
+        run: build.cmd
+      - name: Smoke test
+        shell: cmd
+        run: dist\Downpour\downpour-cli.exe --version
+      - uses: actions/upload-artifact@v5
+        with:
+          name: Downpour-windows
+          path: dist/Downpour

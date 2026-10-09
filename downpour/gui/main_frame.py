@@ -157,6 +157,7 @@ class MainFrame(wx.Frame):
         self._item(dls, "Re&move from the list\tDelete", lambda e: self.remove(False))
         self._item(dls, "Remove and &delete the file\tShift+Delete", lambda e: self.remove(True))
         self._item(dls, "Download a&gain", lambda e: self.redownload())
+        self._item(dls, "Refresh address from the &browser...", lambda e: self.refresh_address())
         self._item(dls, "Clear finished downloads from the list", lambda e: self.clear_finished())
         dls.AppendSeparator()
         self._item(dls, "&Copy address\tCtrl+C", lambda e: self.copy_address())
@@ -308,6 +309,11 @@ class MainFrame(wx.Frame):
         chosen = self._targets()[:1]
         if chosen and forms.confirm(self, f"Download {chosen[0].display_name()} again from the start? Any copy already downloaded is replaced."):
             self.engine.redownload(chosen[0].id)
+
+    def refresh_address(self):
+        chosen = self._targets()[:1]
+        if chosen and chosen[0].status != Status.COMPLETED:
+            self.ctl.wait_for_new_address(chosen[0])
 
     def clear_finished(self):
         done = [d.id for d in self.engine.downloads() if d.status == Status.COMPLETED]
