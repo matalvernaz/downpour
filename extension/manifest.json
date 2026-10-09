@@ -1,0 +1,71 @@
+{
+  "manifest_version": 3,
+  "name": "Downpour",
+  "version": "0.1.0",
+  "description": "Sends downloads, links and media from the browser to Downpour, the accessible download manager for Windows.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2XuyF88mLUKEguUQzmgmHGmvloBocJY8W44P9pGWSwLdXeS5DJiCEWcYRGsSLAp0DCpSLfJyomh/7f9xmvAGBe0sQGJwOV+giBM9UH6KdjsKapGE8Ac2vywR1eNuD4WZk2uMivr2n7hLWFbVwHLGm4J1phrSW/aepjAy/iMew1XaWCNXgQ+KdhFlWy7E1irpJkErtCTo2lr2C721CGuAN9mCfseT3PuZKTbzD3Q3bFRTekMeMM4JP0RTLnnntD9R6yUTeMe+RgJIk3d/w2+Ux+XipvoZd9IcU1NETs3cxgGZqU32PjSb07xOYdoURbpwA4sxRYeoOYFnm5COsRTe0QIDAQAB",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "Downpour",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+D"
+      },
+      "description": "Open the Downpour panel"
+    },
+    "download-focused-link": {
+      "suggested_key": {
+        "default": "Alt+Shift+L"
+      },
+      "description": "Download the focused link with Downpour"
+    },
+    "grab-page-media": {
+      "suggested_key": {
+        "default": "Alt+Shift+M"
+      },
+      "description": "Grab video or audio from this page with Downpour"
+    }
+  },
+  "background": {
+    "service_worker": "background.js",
+    "scripts": [
+      "background.js"
+    ]
+  },
+  "permissions": [
+    "downloads",
+    "cookies",
+    "contextMenus",
+    "storage",
+    "scripting",
+    "activeTab",
+    "nativeMessaging",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "downpour@matalvernaz.github.io",
+      "strict_min_version": "128.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
+    }
+  }
+}

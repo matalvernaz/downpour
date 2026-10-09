@@ -39,12 +39,13 @@ def ssl_context() -> ssl.SSLContext:
 
 
 class HttpError(Exception):
-    def __init__(self, status: int, reason: str, url: str, total: int | None = None):
+    def __init__(self, status: int, reason: str, url: str, total: int | None = None, challenge: bool = False):
         super().__init__(f"HTTP {status} {reason}".strip())
         self.status = status
         self.reason = reason
         self.url = url
         self.total = total  # from "Content-Range: bytes */N" on a 416
+        self.challenge = challenge  # a bot check (such as Cloudflare's) refused us
 
     @property
     def transient(self) -> bool:
@@ -54,6 +55,9 @@ class HttpError(Exception):
 def describe(error: BaseException) -> str:
     """A one-line, human explanation of a download failure."""
     if isinstance(error, HttpError):
+        if error.challenge:
+            return (f"{error} - the site's bot protection turned Downpour away. "
+                    "Choose Download with the browser instead.")
         hints = {
             401: "the server wants a user name and password",
             403: "access denied; the link may have expired - try Refresh address",
@@ -239,11 +243,17 @@ def open_range(
         resp = opener.open(req, timeout=timeout)
     except urllib.error.HTTPError as e:
         total = None
-        m = _UNSATISFIED_RANGE.search(e.headers.get("Content-Range", "") if e.headers else "")
+        headers = e.headers
+        m = _UNSATISFIED_RANGE.search(headers.get("Content-Range", "") if headers else "")
         if m:
             total = int(m.group(1))
+        challenge = bool(headers) and (
+            bool(headers.get("cf-mitigated"))
+            or (e.code in (403, 429, 503) and "cloudflare" in (headers.get("Server") or "").lower()
+                and "text/html" in (headers.get("Content-Type") or ""))
+        )
         e.close()
-        raise HttpError(e.code, e.reason or "", url, total) from None
+        raise HttpError(e.code, e.reason or "", url, total, challenge) from None
     return resp, response_info(resp)
 
 

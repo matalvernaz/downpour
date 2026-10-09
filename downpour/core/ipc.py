@@ -198,10 +198,15 @@ def launch_app(*args: str) -> None:
                 raise
 
 
-def request_or_launch(msg: dict, launch_args: tuple[str, ...] = ("--tray",), wait: float = 30.0) -> dict:
-    """Like ``request``, but starts the app first when it is not running."""
+def request_or_launch(
+    msg: dict, launch_args: tuple[str, ...] = ("--tray",), wait: float = 30.0, timeout: float = 15.0
+) -> dict:
+    """Like ``request``, but starts the app first when it is not running.
+
+    ``wait`` bounds the start-up; ``timeout`` bounds the answer itself.
+    """
     try:
-        return request(msg)
+        return request(msg, timeout=timeout)
     except NotRunning:
         pass
     launch_app(*launch_args)
@@ -209,7 +214,7 @@ def request_or_launch(msg: dict, launch_args: tuple[str, ...] = ("--tray",), wai
     while time.monotonic() < deadline:
         time.sleep(0.25)
         try:
-            return request(msg)
+            return request(msg, timeout=timeout)
         except NotRunning:
             continue
     raise NotRunning("Downpour did not start in time")

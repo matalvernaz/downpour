@@ -222,7 +222,7 @@ def _cookie_file(cookies: list[dict]) -> str | None:
 
 
 def _common_args(dl_or_none, settings: "Settings", cookie_path: str | None, user_agent: str, referrer: str) -> list[str]:
-    args = ["--no-warnings", "--no-colors", "--encoding", "utf-8"]
+    args = ["--no-warnings", "--no-colors", "--encoding", "utf-8"] + js_runtime_args()
     if cookie_path:
         args += ["--cookies", cookie_path]
     if user_agent:
@@ -234,6 +234,18 @@ def _common_args(dl_or_none, settings: "Settings", cookie_path: str | None, user
     elif settings.proxy_mode == "none":
         args += ["--proxy", ""]
     return args
+
+
+def js_runtime_args() -> list[str]:
+    """YouTube needs a JavaScript runtime. yt-dlp enables Deno by itself;
+    when only Node or Bun is installed, enable that instead."""
+    if shutil.which("deno"):
+        return []
+    for name in ("node", "bun"):
+        path = shutil.which(name)
+        if path:
+            return ["--js-runtimes", f"{name}:{path}"]
+    return []
 
 
 def _env() -> dict:

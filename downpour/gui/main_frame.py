@@ -137,6 +137,7 @@ class MainFrame(wx.Frame):
         self._item(tasks, "&Grab video or audio...\tCtrl+M", lambda e: c.grab_media())
         self._item(tasks, "&Batch download...\tCtrl+B", lambda e: c.batch_dialog())
         self._item(tasks, "&Import links from a text file...", lambda e: c.import_links())
+        self._item(tasks, "E&xport addresses to a text file...", lambda e: c.export_links(self.list.rows))
         tasks.AppendSeparator()
         self._item(tasks, "&Hide to the notification area", lambda e: self.Hide())
         self._item(tasks, "E&xit Downpour\tCtrl+Q", lambda e: c.exit())
@@ -158,6 +159,7 @@ class MainFrame(wx.Frame):
         self._item(dls, "Remove and &delete the file\tShift+Delete", lambda e: self.remove(True))
         self._item(dls, "Download a&gain", lambda e: self.redownload())
         self._item(dls, "Refresh address from the &browser...", lambda e: self.refresh_address())
+        self._item(dls, "Download &with the browser instead", lambda e: self.hand_to_browser())
         self._item(dls, "Clear finished downloads from the list", lambda e: self.clear_finished())
         dls.AppendSeparator()
         self._item(dls, "&Copy address\tCtrl+C", lambda e: self.copy_address())
@@ -314,6 +316,11 @@ class MainFrame(wx.Frame):
         chosen = self._targets()[:1]
         if chosen and chosen[0].status != Status.COMPLETED:
             self.ctl.wait_for_new_address(chosen[0])
+
+    def hand_to_browser(self):
+        chosen = self._targets()[:1]
+        if chosen and chosen[0].kind == "http" and chosen[0].status != Status.COMPLETED:
+            self.ctl.hand_to_browser(chosen[0])
 
     def clear_finished(self):
         done = [d.id for d in self.engine.downloads() if d.status == Status.COMPLETED]

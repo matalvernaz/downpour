@@ -49,6 +49,7 @@ TICK = 0.25
 CHECKPOINT_SECONDS = 5.0
 SPEED_WINDOW = 5.0
 NO_SPLIT = 1 << 62
+REFUSAL_RETRIES = 3
 
 
 DONE, MORE, BROKEN = "done", "more", "broken"  # how a response ended
@@ -101,6 +102,7 @@ class HttpTask:
         self._limiter = RateLimiter(dl.speed_limit)
         self._fatal: DownloadError | None = None
         self._failures = 0
+        self._refusals = 0  # outright refusals while no other connection ran
         self._last_error: BaseException | None = None
         self._next_spawn = 0.0
         self._max_conn = 1
@@ -451,6 +453,7 @@ class HttpTask:
                     seg.pos += n
                     self._received += n
                     self._failures = 0
+                    self._refusals = 0
             if n > 0:
                 self._limiter.throttle(n, self._stop)
                 self.engine.limiter.throttle(n, self._stop)
@@ -481,6 +484,13 @@ class HttpTask:
                     self._max_conn = max(1, busy)
 
     def _refused(self, seg: Segment, error: BaseException | None) -> None:
+        """A server said no to a connection outright (403, ranges ignored...).
+
+        With other connections still running, it is rationing connections, so
+        stay at what it allows. With none running, it may only be counting
+        connections that are still closing, so if this download has received
+        data, retry a few times before believing it.
+        """
         with self._lock:
             seg.active = False
             busy = sum(s.active for s in self.dl.segments)
@@ -491,6 +501,11 @@ class HttpTask:
                     self.dl.id, net.describe(error) if error else "range ignored", busy,
                 )
                 return
+            self._refusals += 1
+            retry = self._received > 0 and self._refusals <= REFUSAL_RETRIES
+        if retry:
+            self._note_failure(error or ConnectionRefusedError("range ignored"))
+            return
         if error is not None:
             self._fail(DownloadError(net.describe(error)))
         else:

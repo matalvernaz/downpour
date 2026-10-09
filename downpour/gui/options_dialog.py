@@ -141,7 +141,7 @@ class OptionsDialog(wx.Dialog):
         evt.Skip()
 
     def _browser(self):
-        p, sz = self._page("Browser")
+        p, sz = self._page("Browser integration")
         s = self.s
         self.browser_capture = forms.check(p, sz, "&Take over downloads from the browser", s.browser_capture)
         self.capture_extensions = forms.text(

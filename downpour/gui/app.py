@@ -87,6 +87,7 @@ class Controller:
         self._dialog_busy = False
         self._exiting = False
         self._awaiting_refresh: int | None = None  # download waiting for a fresh link
+        self._handed_back: dict[str, float] = {}  # links given back to the browser, with expiry
         self.clipboard = ClipboardWatcher(self)
         self._schedule_marks: dict[str, str] = {}
         self.timer = wx.Timer()
@@ -163,6 +164,10 @@ class Controller:
     def wants(self, item: dict) -> bool:
         """Should Downpour take this download from the browser?"""
         s = self.settings
+        now = time.time()
+        for url in [str(item.get("url") or ""), str(item.get("finalUrl") or "")]:
+            if url and self._handed_back.get(url, 0) > now:
+                return False  # the user asked the browser to fetch this one itself
         if self._awaiting_refresh is not None and self._refresh_match(item_to_download(item)) is not None:
             return True  # the user is renewing an expired link, whatever the file type
         if not s.browser_capture:
@@ -261,6 +266,34 @@ class Controller:
             forms.message(self._parent(), "That file has no http or https links in it.")
             return
         self._queue_dialog(lambda: self._pick([Download(url=u) for u in urls], title=f"Import: {len(urls)} links"))
+
+    def export_links(self, rows: list[Download]) -> None:
+        """Save the addresses of the downloads now shown, one per line."""
+        if not rows:
+            forms.message(self._parent(), "There are no downloads in this view to export.")
+            return
+        with wx.FileDialog(self._parent(), "Export addresses", defaultFile="downloads.txt",
+                           wildcard="Text files (*.txt)|*.txt", style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as dlg:
+            if dlg.ShowModal() != wx.ID_OK:
+                return
+            path = dlg.GetPath()
+        try:
+            Path(path).write_text("\n".join(d.url for d in rows) + "\n", encoding="utf-8")
+        except OSError as e:
+            forms.message(self._parent(), f"Could not save the file: {e}", icon=wx.ICON_ERROR)
+            return
+        self.feedback.say(f"{len(rows)} addresses exported")
+
+    def hand_to_browser(self, dl: Download) -> None:
+        """Let the browser download it: for sites whose bot checks refuse
+        anything that is not a browser. The extension offers the download
+        to Downpour again, which declines it this time."""
+        import webbrowser
+
+        self._handed_back[dl.url] = time.time() + 600
+        self.engine.pause([dl.id])
+        webbrowser.open(dl.url)
+        self.feedback.say(f"Opening {dl.display_name()} in your browser")
 
     def add_urls(self, urls: list[str]) -> None:
         if len(urls) == 1:

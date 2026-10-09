@@ -8,3 +8,4 @@ dist/
 *.egg-info/
 /data/
 downpour/vendor/
+web-ext-artifacts/

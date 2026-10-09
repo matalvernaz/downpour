@@ -331,3 +331,27 @@ def test_empty_replies_fail_instead_of_looping(server, make_engine, fast_retry):
     # the download must end rather than spin on empty replies.
     if done.status == Status.COMPLETED:
         assert read(done.path) == data
+
+
+def test_bot_check_refusal_is_explained(server, make_engine):
+    url = server.add("/guarded.zip", status=403)
+    engine = make_engine()
+
+    from tests import helpers
+
+    original = helpers._Handler._plain
+
+    def challenge(self, status):
+        self.send_response(status)
+        self.send_header("Server", "cloudflare")
+        self.send_header("cf-mitigated", "challenge")
+        self.send_header("Content-Type", "text/html; charset=UTF-8")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    helpers._Handler._plain = challenge
+    try:
+        dl = wait_for(engine, add(engine, url).id, Status.FAILED)
+    finally:
+        helpers._Handler._plain = original
+    assert "bot protection" in dl.error and "browser instead" in dl.error

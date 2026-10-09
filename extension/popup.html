@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Downpour</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <h1>Downpour</h1>
+
+  <p id="status" role="status" aria-live="polite">Checking whether Downpour is running.</p>
+
+  <div class="field">
+    <input type="checkbox" id="capture">
+    <label for="capture">Capture downloads</label>
+  </div>
+
+  <div class="field" id="siteField" hidden>
+    <input type="checkbox" id="captureSite">
+    <label for="captureSite" id="captureSiteLabel">Capture downloads on this site</label>
+  </div>
+
+  <div class="field">
+    <input type="checkbox" id="capturePrivate" aria-describedby="privateNote">
+    <label for="capturePrivate">Also capture in private windows</label>
+  </div>
+  <p id="privateNote" class="note" hidden>
+    The browser does not let Downpour into private windows yet. To capture there, also allow it in
+    the browser's settings for this extension: "Allow in Incognito" in Chrome, "Allow in InPrivate"
+    in Edge, "Run in Private Windows" in Firefox.
+  </p>
+
+  <div id="siteAccess" hidden>
+    <p class="note">
+      Downpour cannot capture downloads until it may read all websites. It needs that to see the
+      cookies and form submissions that come with a download.
+    </p>
+    <button type="button" id="allowSites">Allow Downpour on all websites</button>
+  </div>
+
+  <button type="button" id="grab">Grab video or audio from this page</button>
+  <button type="button" id="open">Open Downpour</button>
+
+  <script src="popup.js"></script>
+</body>
+</html>
