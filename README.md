@@ -22,7 +22,9 @@ Downloading
 
 - Up to 32 connections per file with dynamic segmentation: a connection that
   finishes early takes over half of the biggest remaining piece, so the
-  download ends with every connection busy.
+  download ends with every connection busy. Everything is written straight
+  into one file, so there is no slow joining step at the end.
+- Light: about 60 MB of memory.
 - Pause and resume, also after closing Downpour, a crash or a power cut.
   Progress is only recorded once the bytes are safely on disk.
 - Automatic retries with backoff; recovery from dropped connections; servers
@@ -47,7 +49,11 @@ Browser and clipboard
 
 - A browser extension for Firefox, Chrome and Edge hands downloads to
   Downpour, adds "Download with Downpour" to link menus, and can collect every
-  link on a page into a checklist.
+  link on a page into a checklist. Alt+Shift+L downloads the focused link,
+  Alt+Shift+M grabs the page's video or audio, and capture can be switched
+  off per site. See docs\browser-extension.md to install it.
+- When a site's bot protection turns Downpour away, "Download with the
+  browser instead" hands the file back to the browser.
 - Copy a link to a downloadable file and Downpour offers to download it.
 - Batch downloads from an address pattern, such as img001.jpg to img100.jpg,
   and importing links from a text file.
