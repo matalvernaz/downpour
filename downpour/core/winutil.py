@@ -118,6 +118,9 @@ def reveal(path: str) -> None:
         open_path(os.path.dirname(path))
 
 
+SCAN_TIMEOUT = 15 * 60  # seconds; a big disc image can take minutes
+
+
 def scan_with_defender(path: str) -> tuple[bool, str]:
     """Scan one file with Microsoft Defender; (clean, message)."""
     candidates = [
@@ -130,12 +133,16 @@ def scan_with_defender(path: str) -> tuple[bool, str]:
     exe = next((c for c in candidates if os.path.exists(c)), None)
     if exe is None:
         return True, "Microsoft Defender is not available"
-    proc = subprocess.run(
-        [exe, "-Scan", "-ScanType", "3", "-File", path, "-DisableRemediation"],
-        capture_output=True,
-        text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
+    try:
+        proc = subprocess.run(
+            [exe, "-Scan", "-ScanType", "3", "-File", path, "-DisableRemediation"],
+            capture_output=True,
+            text=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            timeout=SCAN_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return True, "The scan took too long and was stopped"
     if proc.returncode == 0:
         return True, "No threats found"
     if proc.returncode == 2:

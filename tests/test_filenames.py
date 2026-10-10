@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from downpour.core import checksum, filenames
+from downpour.core import checksum, filenames, net
 from downpour.core.units import format_duration, format_size, parse_size
 
 
@@ -30,6 +30,9 @@ def test_disposition_absent():
 def test_sanitize():
     assert filenames.sanitize('a<b>c:"d"|e?.txt') == "a_b_c__d__e_.txt"
     assert filenames.sanitize("CON.txt") == "_CON.txt"
+    assert filenames.sanitize("nul.tar.gz") == "_nul.tar.gz"  # reserved on Windows 10
+    assert filenames.sanitize("COM0.zip") == "_COM0.zip"
+    assert filenames.sanitize("console.txt") == "console.txt"
     assert filenames.sanitize("trailing dots...") == "trailing dots"
     assert filenames.sanitize("..") == "download"
     assert len(filenames.sanitize("x" * 400 + ".zip")) <= filenames.MAX_NAME
@@ -50,6 +53,27 @@ def test_unique_path(tmp_path: Path):
     assert filenames.unique_path(target).name == "a (3).zip"
     taken = {str(tmp_path / "a (3).zip").lower()}
     assert filenames.unique_path(target, taken).name == "a (4).zip"
+
+
+def test_unique_stem_ignores_extensions(tmp_path: Path):
+    assert filenames.unique_stem(tmp_path, "Intro.mp4") == "Intro.mp4"
+    (tmp_path / "Intro.webm").write_bytes(b"x")  # yt-dlp may pick another extension
+    assert filenames.unique_stem(tmp_path, "Intro.mp4") == "Intro (2).mp4"
+    (tmp_path / "Intro (2).f137.mp4.part").write_bytes(b"")
+    assert filenames.unique_stem(tmp_path, "Intro.mp4", {"intro (3)"}) == "Intro (4).mp4"
+    assert filenames.unique_stem(tmp_path / "missing", "Intro.mp4") == "Intro.mp4"
+
+
+def test_safe_url_hides_credentials():
+    assert net.safe_url("https://user:pw@example.com:8443/f.zip") == "https://example.com:8443/f.zip"
+    assert net.safe_url("http://user:pw@[::1]:8080/f.zip") == "http://[::1]:8080/f.zip"
+    assert net.safe_url("https://example.com/f.zip") == "https://example.com/f.zip"
+
+
+def test_resume_validator_never_uses_weak_etags():
+    assert net.resume_validator('"abc"', "Tue, 01 Sep 2026 10:00:00 GMT") == '"abc"'
+    assert net.resume_validator('W/"abc"', "Tue, 01 Sep 2026 10:00:00 GMT") == "Tue, 01 Sep 2026 10:00:00 GMT"
+    assert net.resume_validator("", "") == ""
 
 
 def test_checksum_parse():

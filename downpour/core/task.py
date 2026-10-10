@@ -179,9 +179,11 @@ class HttpTask:
                 self._open_file(create=False)
                 return None
             seg = next(s for s in dl.segments if not s.done)
-            resp, info = self._connect(seg.pos)
+            resp, info = self._connect(seg.pos, if_range=net.resume_validator(dl.etag, dl.last_modified))
             if info.ranged and info.start == seg.pos and info.total == dl.size:
                 self._fetch_url = info.url
+                if not (dl.etag or dl.last_modified):  # cleared when the address was renewed
+                    dl.etag, dl.last_modified = info.etag, info.last_modified
                 self._open_file(create=False)
                 self._max_conn = self._connection_limit()
                 with self._lock:
@@ -520,7 +522,7 @@ class HttpTask:
 
     # -- I/O helpers ----------------------------------------------------------
 
-    def _connect(self, start: int | None):
+    def _connect(self, start: int | None, if_range: str = ""):
         """Open the first connection, retrying transient failures."""
         dl = self.dl
         settings = self.engine.settings
@@ -532,6 +534,7 @@ class HttpTask:
                     self._opener, dl.url, start=start,
                     user_agent=dl.user_agent or settings.user_agent,
                     referrer=dl.referrer, headers=dl.headers, timeout=settings.timeout,
+                    if_range=if_range,
                 )
             except net.HttpError as e:
                 if not e.transient:
@@ -683,4 +686,9 @@ class HttpTask:
         if settings.scan_after_download:
             clean, message = winutil.scan_with_defender(str(final))
             if not clean:
-                raise DownloadError(message)
+                # The scan runs without remediation, so nothing else removes it.
+                try:
+                    final.unlink()
+                except OSError:
+                    raise DownloadError(f"{message}. Delete it without opening it: {final}") from None
+                raise DownloadError(f"{message}, so Downpour deleted it")

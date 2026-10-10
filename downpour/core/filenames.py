@@ -12,7 +12,12 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 _INVALID = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
-_RESERVED = {"CON", "PRN", "AUX", "NUL"} | {f"COM{i}" for i in range(1, 10)} | {f"LPT{i}" for i in range(1, 10)}
+# Windows device names. Windows 10 also reserves them followed by any
+# extension ("nul.txt", "con.tar.gz"), so the part before the first dot counts.
+_RESERVED = (
+    {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+    | {f"{port}{n}" for port in ("COM", "LPT") for n in [*"0123456789", "¹", "²", "³"]}
+)
 # Extensions that name the script serving a file rather than the file itself.
 _SCRIPT_EXTENSIONS = {".php", ".asp", ".aspx", ".jsp", ".cgi", ".pl", ".py", ".do", ".action"}
 MAX_NAME = 200
@@ -25,7 +30,7 @@ def sanitize(name: str, fallback: str = "download") -> str:
     if not name:
         return fallback
     stem, ext = os.path.splitext(name)
-    if stem.upper() in _RESERVED:
+    if stem.split(".")[0].rstrip(" ").upper() in _RESERVED:
         stem = "_" + stem
     if len(stem) + len(ext) > MAX_NAME:
         ext = ext[:20]
@@ -110,3 +115,32 @@ def unique_path(path: Path, taken: set[str] | None = None) -> Path:
         if not in_use(candidate):
             return candidate
     raise OSError(f"No free file name for {path}")
+
+
+def unique_stem(folder: Path, name: str, taken: set[str] | None = None) -> str:
+    """``name``, or ``name (2).ext`` and so on, so that nothing in ``folder``
+    starts with the same stem, whatever its extension.
+
+    For yt-dlp downloads, whose real extension is only known at the end.
+    yt-dlp treats an existing file of the same name as already downloaded and
+    reports success without fetching anything. ``taken`` holds lower-cased
+    stems that other downloads have claimed.
+    """
+    taken = taken or set()
+    stem, ext = os.path.splitext(name)
+    try:
+        existing = [entry.lower() for entry in os.listdir(folder)]
+    except OSError:
+        existing = []
+
+    def in_use(candidate: str) -> bool:
+        key = candidate.lower()
+        return key in taken or any(entry.startswith(key + ".") for entry in existing)
+
+    if not in_use(stem):
+        return name
+    for i in range(2, 10000):
+        candidate = f"{stem} ({i})"
+        if not in_use(candidate):
+            return candidate + ext
+    raise OSError(f"No free file name for {name} in {folder}")

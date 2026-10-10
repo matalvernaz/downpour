@@ -22,11 +22,26 @@ URL_RE = re.compile(r"""https?://[^\s<>"'`]+""", re.I)
 GENERAL = "General"
 
 
+def _trim(url: str) -> str:
+    """Drop punctuation that ends the sentence around a link, but keep a
+    closing bracket the link opened itself, as in wiki/Python_(language)."""
+    pairs = {")": "(", "]": "[", "}": "{"}
+    while url:
+        last = url[-1]
+        if last in ".,;:!?'\"":
+            url = url[:-1]
+        elif last in pairs and url.count(pairs[last]) < url.count(last):
+            url = url[:-1]
+        else:
+            break
+    return url
+
+
 def urls_in(text: str) -> list[str]:
     """Every http(s) link in ``text``, in order, without duplicates."""
     seen, out = set(), []
     for m in URL_RE.finditer(text or ""):
-        url = m.group(0).rstrip(".,;:!?)]}'\"")
+        url = _trim(m.group(0))
         if url not in seen:
             seen.add(url)
             out.append(url)
@@ -412,12 +427,12 @@ class PropertiesDialog(wx.Dialog):
             forms.message(self, "That does not look like an MD5, SHA-1, SHA-256 or SHA-512 checksum.", icon=wx.ICON_WARNING)
             self.checksum.SetFocus()
             return
-        address = self.address.GetValue().strip()
-        if not urls_in(address):
+        found = urls_in(self.address.GetValue())
+        if not found:
             forms.message(self, "The address must start with http:// or https://", icon=wx.ICON_WARNING)
             self.address.SetFocus()
             return
-        self.new_url = address
+        self.new_url = found[0]
         self.values = dict(
             speed_limit=limit,
             connections=self.connections.GetValue(),

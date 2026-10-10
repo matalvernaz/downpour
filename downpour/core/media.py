@@ -335,7 +335,9 @@ def _parse_info(url: str, data: dict) -> MediaInfo:
         for entry in data.get("entries") or []:
             if not isinstance(entry, dict):
                 continue
-            entry_url = entry.get("url") or entry.get("webpage_url")
+            # Some sites list entries by bare ID; only web addresses can be queued.
+            entry_url = next((str(u) for u in (entry.get("url"), entry.get("webpage_url"))
+                              if str(u or "").lower().startswith(("http://", "https://"))), "")
             if entry_url:
                 info.entries.append((entry_url, str(entry.get("title") or entry_url)))
         return info
@@ -436,11 +438,15 @@ class MediaTask:
         ffmpeg = find_ffmpeg(s)
         if choice and choice.needs_ffmpeg and not ffmpeg:
             selector = "ba/b" if choice.audio_only else "b"  # cannot merge streams without FFmpeg
-        stem = Path(dl.filename).stem if dl.filename else "%(title).180B"
-        template = str(Path(dl.directory) / f"{stem}.%(ext)s")
+        # The output template is the whole path, and yt-dlp reads "%(...)" in
+        # it as a field: a title holding "%(" would be mangled, so escape.
+        stem = Path(dl.filename).stem.replace("%", "%%") if dl.filename else "%(title).180B"
+        template = os.path.join(dl.directory.replace("%", "%%"), f"{stem}.%(ext)s")
         cmd = [
             ytdlp, "--newline", "--progress", "--no-playlist", "--windows-filenames", "--no-mtime",
             "--progress-template", "download:DPPROG %(progress)j",
+            # --print makes yt-dlp quiet, which hides its "[Merger]" lines; this is printed anyway.
+            "--progress-template", "postprocess:DPPOST %(progress.status)s %(progress.postprocessor)s",
             "--print", "after_move:DPFILE %(filepath)s",
             "-f", selector, "-o", template, "-N", "4",
         ]
@@ -467,6 +473,8 @@ class MediaTask:
             ytdlp = find_ytdlp(self.engine.settings)
             if not ytdlp:
                 raise MediaError("yt-dlp is not installed. Open Options, Media, and install it.")
+            if not dl.directory:
+                dl.directory = self.engine.settings.download_dir  # never the working folder
             Path(dl.directory).mkdir(parents=True, exist_ok=True)
             cookie_path = _cookie_file(dl.cookies)
             self.engine._set_status(dl, Status.CONNECTING)
@@ -476,6 +484,8 @@ class MediaTask:
                 self._command(ytdlp, cookie_path), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW, env=_env(),
             )
+            if self._stop.is_set():  # stop() came before _proc was set, so it could not end it
+                _kill_tree(self._proc)
             final_path, tail = self._follow(self._proc)
             code = self._proc.wait()
             if self._stop.is_set():
@@ -511,11 +521,12 @@ class MediaTask:
                 self._progress(line[7:])
             elif line.startswith("DPFILE "):
                 final_path = line[7:].strip()
-            else:
+            elif line.startswith("DPPOST started"):
+                # Joining streams or converting, which can take a while.
+                if dl.status != Status.FINISHING:
+                    self.engine._set_status(dl, Status.FINISHING)
+            elif not line.startswith("DPPOST "):
                 tail = (tail + [line])[-40:]
-                if line.startswith(("[Merger]", "[ExtractAudio]", "[FixupM3u8]", "[VideoConvertor]")):
-                    if dl.status != Status.FINISHING:
-                        self.engine._set_status(dl, Status.FINISHING)
         return final_path, tail
 
     def _progress(self, payload: str) -> None:

@@ -34,6 +34,7 @@ class MediaDialog(wx.Dialog):
         self._alive = True
         self._name_edited = False
         self._folder_edited = False
+        self._fetching = True
         self._stop = threading.Event()
 
         sizer = wx.BoxSizer(wx.VERTICAL)
@@ -86,6 +87,7 @@ class MediaDialog(wx.Dialog):
     def _fetched(self, info: media.MediaInfo | None, error: str):
         if not self._alive:
             return
+        self._fetching = False
         focus_was_summary = wx.Window.FindFocus() is self.summary
         if info is None:
             self.summary.SetValue(f"yt-dlp could not read this page: {error}")
@@ -132,6 +134,11 @@ class MediaDialog(wx.Dialog):
             self.folder.ChangeValue(folder_for_category(self.settings, "Music" if choice.audio_only else "Video"))
 
     def _finish(self, start: bool):
+        if self._fetching:
+            # Without the page's details the file would be named after the
+            # address ("watch"), and a playlist would come as one item.
+            forms.message(self, "Downpour is still reading the page. Try again in a moment.")
+            return
         folder = self.folder.GetValue().strip()
         if not folder:
             forms.message(self, "Choose a folder to save into.", icon=wx.ICON_WARNING)

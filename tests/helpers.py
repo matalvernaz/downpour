@@ -32,6 +32,7 @@ class FileSpec:
     drop_after: int | None = None  # cut one connection after this many bytes
     redirect_to: str | None = None
     empty_ranges: bool = False  # answer ranged requests after the first with no bytes
+    etag: str | None = None  # sent as ETag; an If-Range that differs gets the whole file
 
 
 @dataclass
@@ -100,6 +101,9 @@ class _Handler(BaseHTTPRequestHandler):
         data = spec.data
         start, end, status = 0, len(data), 200
         rng = self.headers.get("Range")
+        if_range = self.headers.get("If-Range")
+        if if_range is not None and if_range != spec.etag:
+            rng = None  # changed since the client's copy: send all of it
         if rng and spec.ranges:
             m = re.match(r"bytes=(\d+)-(\d*)", rng)
             start = int(m.group(1))
@@ -120,6 +124,8 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", spec.content_type)
         if spec.ranges:
             self.send_header("Accept-Ranges", "bytes")
+        if spec.etag:
+            self.send_header("ETag", spec.etag)
         if status == 206:
             self.send_header("Content-Range", f"bytes {start}-{end - 1}/{len(data)}")
         if spec.disposition:

@@ -407,16 +407,23 @@ class Controller:
                          for u, t in info.entries]
             else:
                 items = [(page, filename, info.title if info else "")]
+            added = 0
             for item_url, name, title in items:
                 dl = Download(
                     url=item_url, kind="media", media_format=media_format_value(chosen),
                     filename=name, filename_fixed=True, directory=directory, description=title,
                     cookies=cookies or [], user_agent=user_agent, referrer=referrer,
                 )
-                self.engine.add(dl, start=start, force=start and not playlist)
-            self.feedback.play("added")
+                try:
+                    self.engine.add(dl, start=start, force=start and not playlist)
+                except ValueError:
+                    continue  # a playlist entry without a web address
+                added += 1
+            if added:
+                self.feedback.play("added")
             if len(items) > 1:
-                self.feedback.say(f"{len(items)} items added")
+                skipped = len(items) - added
+                self.feedback.say(f"{added} items added" + (f", {skipped} skipped without a web address" if skipped else ""))
 
         self._queue_dialog(show)
 
@@ -719,11 +726,13 @@ def run(urls: list[str] | None = None, tray: bool = False) -> int:
     try:
         server = ipc.Server(handler)
     except ipc.AlreadyRunning:
+        if tray and not urls:
+            return 0  # started with Windows while already running: stay out of sight
         message = {"type": "add", "items": [{"url": u} for u in urls], "pick": len(urls) > 1} if urls else {"type": "show"}
         try:
             ipc.request(message)
-        except (ipc.NotRunning, OSError, TimeoutError):
-            pass
+        except Exception:  # noqa: BLE001 - this copy is exiting either way
+            log.warning("could not reach the running copy", exc_info=True)
         return 0
 
     app = wx.App(False)

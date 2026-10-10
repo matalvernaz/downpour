@@ -122,7 +122,11 @@ class Engine:
         with self._lock:
             dl.status = Status.QUEUED if start else Status.PAUSED
             dl.position = max((d.position for d in self._downloads.values()), default=0.0) + 1
-            if not dl.filename:
+            if dl.kind == "media":
+                # Without a name, yt-dlp names the file after the video's title.
+                if dl.filename and dl.directory:
+                    dl.filename = filenames.unique_stem(Path(dl.directory), dl.filename, self._media_stems(dl))
+            elif not dl.filename:
                 dl.filename = filenames.sanitize(filenames.from_url(dl.url))
             self.store.insert(dl)
             self._downloads[dl.id] = dl
@@ -131,6 +135,17 @@ class Engine:
         self._emit("added", dl)
         self._schedule()
         return dl
+
+    def _media_stems(self, dl: Download) -> set[str]:
+        """Names that other unfinished video and audio downloads into the same
+        folder will use, without extensions (yt-dlp picks those at the end)."""
+        folder = os.path.normcase(os.path.abspath(dl.directory))
+        return {
+            os.path.splitext(d.filename)[0].lower()
+            for d in self._downloads.values()
+            if d.kind == "media" and d.filename and d.status != Status.COMPLETED
+            and os.path.normcase(os.path.abspath(d.directory or ".")) == folder
+        }
 
     def start(self, ids: Iterable[int], force: bool = True) -> None:
         changed = []
@@ -165,7 +180,9 @@ class Engine:
                 self._forced.discard(i)
                 task = self._tasks.get(i)
                 if task is not None:
-                    self._after_stop.pop(i, None)
+                    # Pausing overrides a pending restart, never a removal or redownload.
+                    if self._after_stop.get(i, ("",))[0] == "restart":
+                        del self._after_stop[i]
                     task.stop(Status.PAUSED)
                 elif dl.status == Status.QUEUED:
                     dl.status = Status.PAUSED
@@ -241,8 +258,6 @@ class Engine:
             dl.completed_at = None
             dl.error = ""
             dl.status = Status.QUEUED
-            if not dl.filename_fixed:
-                dl.directory = ""
             self._forced.add(dl.id)
             self.save(dl)
         self._emit("changed", dl)
@@ -258,6 +273,9 @@ class Engine:
             if dl is None:
                 return
             dl.url = url
+            # A renewed link may come from another server whose ETag differs
+            # for the same file; resume on the size check alone this once.
+            dl.etag = dl.last_modified = ""
             self.save(dl)
             task = self._tasks.get(download_id)
             if task is not None:

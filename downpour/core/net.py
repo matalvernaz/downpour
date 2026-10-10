@@ -220,9 +220,12 @@ def open_range(
     referrer: str = "",
     headers: dict[str, str] | None = None,
     timeout: float = 30.0,
+    if_range: str = "",
 ) -> tuple[http.client.HTTPResponse, ResponseInfo]:
     """GET ``url``, asking for bytes ``[start, end)`` when start is not None.
 
+    ``if_range`` (see resume_validator) makes the server send the whole file
+    with status 200 instead when its copy has changed since.
     Raises HttpError for any status of 400 and above.
     """
     hdrs = {
@@ -235,8 +238,10 @@ def open_range(
         hdrs["Referer"] = referrer
     if start is not None:
         hdrs["Range"] = f"bytes={start}-" + (str(end - 1) if end is not None else "")
+        if if_range:
+            hdrs["If-Range"] = if_range
     for key, value in (headers or {}).items():
-        if key.lower() not in ("range", "accept-encoding", "host", "content-length"):
+        if key.lower() not in ("range", "if-range", "accept-encoding", "host", "content-length"):
             hdrs[key] = value
     req = urllib.request.Request(url, headers=hdrs, method="GET")
     try:
@@ -255,6 +260,18 @@ def open_range(
         e.close()
         raise HttpError(e.code, e.reason or "", url, total, challenge) from None
     return resp, response_info(resp)
+
+
+def resume_validator(etag: str, last_modified: str) -> str:
+    """The If-Range value for resuming: a strong ETag, else Last-Modified.
+
+    A server that gets a mismatch sends the whole file again, so a file
+    replaced by another of the same size is never stitched onto the old one.
+    Weak ETags (W/...) are not allowed in If-Range.
+    """
+    if etag and not etag.startswith("W/"):
+        return etag
+    return last_modified
 
 
 def pick_name(info: ResponseInfo, original_url: str) -> str:
@@ -345,6 +362,8 @@ def safe_url(url: str) -> str:
     if parts.username is None and parts.password is None:
         return url
     netloc = parts.hostname or ""
+    if ":" in netloc:
+        netloc = f"[{netloc}]"  # an IPv6 address
     if parts.port:
         netloc += f":{parts.port}"
     return parts._replace(netloc=netloc).geturl()

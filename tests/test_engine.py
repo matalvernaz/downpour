@@ -229,6 +229,53 @@ def test_file_changed_on_server_restarts(server, make_engine):
     assert read(done.path) == newer
 
 
+def test_same_size_replacement_on_the_server_starts_over(server, make_engine):
+    data = payload(1024 * 1024)
+    url = server.add("/nightly.bin", data, delay=0.01, etag='"v1"')
+    engine = make_engine(max_connections=2)
+    dl = add(engine, url)
+    wait_until(lambda: dl.downloaded > 100_000, message="some progress")
+    engine.pause([dl.id])
+    wait_for(engine, dl.id, Status.PAUSED)
+    newer = payload(len(data), seed=2)
+    spec = server.files["/nightly.bin"]
+    spec.data, spec.etag, spec.delay = newer, '"v2"', 0
+    before = len(server.requests_for("/nightly.bin"))
+    engine.start([dl.id])
+    done = wait_for(engine, dl.id, Status.COMPLETED)
+    assert read(done.path) == newer
+    assert server.requests_for("/nightly.bin")[before].headers.get("If-Range") == '"v1"'
+
+
+def test_unchanged_file_resumes_with_if_range(server, make_engine):
+    data = payload(1024 * 1024)
+    url = server.add("/stable.bin", data, delay=0.01, etag='"same"')
+    engine = make_engine(max_connections=2)
+    dl = add(engine, url)
+    wait_until(lambda: dl.downloaded > 100_000, message="some progress")
+    engine.pause([dl.id])
+    wait_for(engine, dl.id, Status.PAUSED)
+    server.files["/stable.bin"].delay = 0
+    before = len(server.requests_for("/stable.bin"))
+    engine.start([dl.id])
+    done = wait_for(engine, dl.id, Status.COMPLETED)
+    assert read(done.path) == data
+    resumed = server.requests_for("/stable.bin")[before:]
+    assert resumed[0].headers.get("If-Range") == '"same"'
+    assert all((r.start or 0) > 0 for r in resumed)
+
+
+def test_pause_does_not_cancel_a_removal(server, make_engine):
+    url = server.add("/doomed.bin", payload(1024 * 1024), delay=0.01)
+    engine = make_engine()
+    dl = add(engine, url)
+    wait_until(lambda: dl.downloaded > 0, message="some progress")
+    engine.remove([dl.id])
+    engine.pause([dl.id])  # while the task is still winding down
+    wait_until(lambda: engine.get(dl.id) is None, message="removal")
+    assert not os.path.exists(dl.part_path)
+
+
 def test_speed_limit(server, make_engine):
     data = payload(300_000)
     url = server.add("/limited-speed.bin", data)
@@ -265,16 +312,26 @@ def test_remove_and_redownload(server, make_engine):
     assert not os.path.exists(dl.path)
 
 
+def test_redownload_keeps_the_chosen_folder(server, make_engine, tmp_path):
+    url = server.add("/kept.bin", payload(10_000))
+    engine = make_engine()
+    folder = str(tmp_path / "chosen")
+    dl = wait_for(engine, add(engine, url, directory=folder).id, Status.COMPLETED)
+    engine.redownload(dl.id)
+    again = wait_for(engine, dl.id, Status.COMPLETED)
+    assert again.directory == folder and os.path.exists(again.path)
+
+
 def test_refresh_address_keeps_progress(server, make_engine):
     data = payload(1024 * 1024)
-    url = server.add("/old-link.bin", data, delay=0.01)
+    url = server.add("/old-link.bin", data, delay=0.01, etag='"old-server"')
     engine = make_engine(max_connections=2)
     dl = add(engine, url)
     wait_until(lambda: dl.downloaded > 200_000, message="some progress")
     engine.pause([dl.id])
     wait_for(engine, dl.id, Status.PAUSED)
     server.files["/old-link.bin"].status = 403
-    new_url = server.add("/new-link.bin", data)
+    new_url = server.add("/new-link.bin", data, etag='"other-server"')
     engine.refresh_url(dl.id, new_url)
     engine.start([dl.id])
     done = wait_for(engine, dl.id, Status.COMPLETED)
