@@ -31,6 +31,10 @@ recommended by blind users. That gap is Downpour's reason to exist.
 - The Firefox extension is signed by Mozilla (unlisted), so it installs
   permanently.
 - Detailed logs of every part, with secrets kept out (docs/logging.md).
+- A setup program, and updates from GitHub releases that install themselves
+  after asking.
+- Grab offers the audio and video a page actually played, in a checklist,
+  for players that stream from private addresses.
 
 ## Next
 
