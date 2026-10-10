@@ -213,6 +213,18 @@ def set_file_time(path: str, last_modified: str) -> bool:
     return True
 
 
+def run_after_download(command: str, path: str) -> None:
+    """Start the user's command for a finished file, [File] replaced by the
+    file's path. It runs detached; failures are logged, never shown."""
+    filled = command.replace("[File]", f'"{path}"') if "[File]" in command else f'{command} "{path}"'
+    try:
+        subprocess.Popen(filled, shell=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        log.info("ran after download: %s", filled)
+    except OSError as e:
+        log.warning("could not run the after-download command %r: %s", command, e)
+
+
 def open_path(path: str) -> None:
     log.debug("opening %s", path)
     if WINDOWS:

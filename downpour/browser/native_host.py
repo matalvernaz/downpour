@@ -43,7 +43,7 @@ MAX_INCOMING = ipc.MAX_MESSAGE  # the pipe refuses anything larger anyway
 MAX_REPLY = 1024 * 1024  # browsers disconnect a host that sends more
 LOG_NAME = "native-host.log"
 
-MESSAGE_TYPES = frozenset({"hello", "offer", "add", "media", "show", "log"})
+MESSAGE_TYPES = frozenset({"hello", "offer", "add", "media", "show", "log", "pass"})
 
 # "hello" is the popup's status check: answer fast and never start the app.
 HELLO_TIMEOUT = 5.0

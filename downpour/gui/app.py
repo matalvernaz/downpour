@@ -91,6 +91,7 @@ class Controller:
         self._exiting = False
         self._awaiting_refresh: int | None = None  # download waiting for a fresh link
         self._handed_back: dict[str, float] = {}  # links given back to the browser, with expiry
+        self._pass_next = 0.0  # until when the next offered download stays in the browser
         self.clipboard = ClipboardWatcher(self)
         self._schedule_marks: dict[str, str] = {}
         self.timer = wx.Timer()
@@ -124,6 +125,7 @@ class Controller:
     def _tick(self, evt) -> None:
         running, queued, speed = self.engine.totals()
         winutil.keep_awake(bool(running) and self.settings.keep_awake)
+        self.engine.tick()
         if running:
             tip = f"Downpour: {running} downloading at {format_speed(speed) or '0 bytes/s'}"
         elif queued:
@@ -145,6 +147,12 @@ class Controller:
         if kind == "show":
             log.info("request show: bringing the window forward")
             wx.CallAfter(self.show_window)
+            return {"ok": True}
+        if kind == "pass":
+            # The extension's "let the browser keep the next download" key.
+            self._pass_next = time.time() + 600
+            log.info("request pass: the next browser download stays in the browser")
+            self.feedback.say("The next download stays in the browser")
             return {"ok": True}
         if kind == "quit":
             log.info("request quit: closing, as an installer or the command line asked")
@@ -208,6 +216,9 @@ class Controller:
         for url in [str(item.get("url") or ""), str(item.get("finalUrl") or "")]:
             if url and self._handed_back.get(url, 0) > now:
                 return False, "the user sent this one back to the browser"
+        if self._pass_next > now:
+            self._pass_next = 0.0
+            return False, "the user asked to let the browser keep the next download"
         if self._awaiting_refresh is not None and self._refresh_match(item_to_download(item)) is not None:
             return True, "it renews the address of an unfinished download"
         if not s.browser_capture:

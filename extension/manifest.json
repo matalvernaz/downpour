@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Downpour",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Sends downloads, links and media from the browser to Downpour, the accessible download manager for Windows.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2XuyF88mLUKEguUQzmgmHGmvloBocJY8W44P9pGWSwLdXeS5DJiCEWcYRGsSLAp0DCpSLfJyomh/7f9xmvAGBe0sQGJwOV+giBM9UH6KdjsKapGE8Ac2vywR1eNuD4WZk2uMivr2n7hLWFbVwHLGm4J1phrSW/aepjAy/iMew1XaWCNXgQ+KdhFlWy7E1irpJkErtCTo2lr2C721CGuAN9mCfseT3PuZKTbzD3Q3bFRTekMeMM4JP0RTLnnntD9R6yUTeMe+RgJIk3d/w2+Ux+XipvoZd9IcU1NETs3cxgGZqU32PjSb07xOYdoURbpwA4sxRYeoOYFnm5COsRTe0QIDAQAB",
   "icons": {
@@ -36,6 +36,12 @@
         "default": "Alt+Shift+M"
       },
       "description": "Grab video or audio from this page with Downpour"
+    },
+    "keep-next-download": {
+      "suggested_key": {
+        "default": "Alt+Shift+K"
+      },
+      "description": "Let the browser keep the next download"
     }
   },
   "background": {

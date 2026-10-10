@@ -392,6 +392,13 @@ class Engine:
                     self.save(dl)
         self._emit("changed", None)
 
+    def tick(self) -> None:
+        """Once a minute or so: the timed speed limit may have begun or ended."""
+        rate = self.settings.effective_speed_limit()
+        if rate != self.limiter.rate:
+            log.info("speed limit now %s", rate or "none")
+            self.limiter.set_rate(rate)
+
     def apply_settings(self) -> None:
         log.debug(
             "settings applied: total speed limit %s, %d downloads at once",

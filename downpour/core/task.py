@@ -109,6 +109,7 @@ class HttpTask:
         self._max_conn = 1
         self._received = 0
         self._started = 0.0
+        self._slow_since: float | None = None  # when the speed first dropped below the stall threshold
         self._peak_connections = 0
         self._samples: collections.deque[tuple[float, int]] = collections.deque()
         self.checkpointed: list | None = None  # last segment snapshot known to be on disk
@@ -355,6 +356,7 @@ class HttpTask:
             self._measure(now)
             if complete and busy == 0:
                 return
+            self._watch_for_stall(now, busy)
             if failures > self.engine.settings.max_retries:
                 for extra in new:
                     self._release(extra)
@@ -535,6 +537,29 @@ class HttpTask:
                 self.engine.limiter.throttle(n, self._stop)
             hint = min(self._limiter.chunk_hint(CHUNK), self.engine.limiter.chunk_hint(CHUNK))
         return BROKEN
+
+    def _watch_for_stall(self, now: float, busy: int) -> None:
+        """A resumable download that crawls for too long is reconnected: its
+        connections are cut, which makes the workers hand their segments
+        back, and the loop reopens them after the usual backoff."""
+        settings = self.engine.settings
+        if not (self.dl.resumable and busy and settings.stall_speed > 0 and settings.stall_seconds > 0):
+            self._slow_since = None
+            return
+        if self.dl.speed >= settings.stall_speed or now - self._started < SPEED_WINDOW:
+            self._slow_since = None
+            return
+        if self._slow_since is None:
+            self._slow_since = now
+            return
+        if now - self._slow_since >= settings.stall_seconds:
+            log.info(
+                "download %s: only %s for %d seconds; reconnecting",
+                self.dl.id, format_speed(self.dl.speed), settings.stall_seconds,
+            )
+            self._slow_since = None
+            self._note_failure(TimeoutError("the download slowed to a crawl"))
+            self._abort_all()
 
     # -- failure bookkeeping ----------------------------------------------------
 
@@ -781,3 +806,5 @@ class HttpTask:
         if settings.keep_server_date and dl.last_modified:
             if winutil.set_file_time(str(final), dl.last_modified):
                 log.debug("download %s: file dated %s, as the server said", dl.id, dl.last_modified)
+        if settings.after_download_command.strip():
+            winutil.run_after_download(settings.after_download_command, str(final))

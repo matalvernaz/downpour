@@ -79,6 +79,14 @@ class OptionsDialog(wx.Dialog):
         self.sound_complete = forms.check(p, sz, "&Play sounds", s.sound_complete)
         self.notify_complete = forms.check(p, sz, "Show Windows &notifications when nothing was spoken", s.notify_complete)
         self.scan_after_download = forms.check(p, sz, "Scan finished downloads with Microsoft &Defender", s.scan_after_download)
+        self.after_download_command = forms.text(
+            p, sz, "Run this command for each finished file ([File] is its path; empty for none):", s.after_download_command
+        )
+        self.sound_fields = {}
+        for event, label in (("added", "Sound when a download is &added:"), ("complete", "Sound when a download &completes:"),
+                             ("failed", "Sound when a download fa&ils:"), ("queue-done", "Sound when all downloads finish:")):
+            self.sound_fields[event] = forms.file_row(p, sz, label + " (empty for the built-in sound)", s.sounds.get(event, ""),
+                                                      wildcard="Sound files (*.wav)|*.wav")
         self.mark_of_the_web = forms.check(p, sz, "&Mark downloaded files as coming from the internet (recommended)", s.mark_of_the_web)
         self.keep_server_date = forms.check(p, sz, "Give finished files the &date the server reports", s.keep_server_date)
         self.recycle_bin = forms.check(p, sz, "Send deleted files to the &Recycle Bin", s.recycle_bin)
@@ -102,6 +110,12 @@ class OptionsDialog(wx.Dialog):
         self.max_connections = forms.spin(p, sz, "&Connections per download:", s.max_connections, 1, 32)
         self.max_active = forms.spin(p, sz, "&Downloads running at the same time:", s.max_active, 1, 20)
         self.speed_limit_enabled = forms.check(p, sz, "&Limit the total download speed", s.speed_limit_enabled)
+        self.timed_limit_enabled = forms.check(p, sz, "Use a different limit for part of the da&y", s.timed_limit_enabled)
+        self.timed_limit = forms.text(p, sz, "Limit during those &hours (for example 200K; 0 for none):", _size_field(s.timed_limit))
+        self.timed_limit_start = forms.text(p, sz, "From (24-hour clock, for example 08:00):", s.timed_limit_start)
+        self.timed_limit_end = forms.text(p, sz, "Until (for example 23:00):", s.timed_limit_end)
+        self.stall_speed = forms.text(p, sz, "Reconnect a download slower than (for example 1K; 0 never):", _size_field(s.stall_speed))
+        self.stall_seconds = forms.spin(p, sz, "after this many seconds:", s.stall_seconds, 10, 600)
         self.speed_limit = forms.text(p, sz, "&Speed limit (for example 500K or 2M):", _size_field(s.speed_limit) if s.speed_limit else "1M")
         self.timeout = forms.spin(p, sz, "Connection &timeout in seconds:", int(s.timeout), 5, 300)
         self.max_retries = forms.spin(p, sz, "&Retries before a download fails:", s.max_retries, 0, 100)
@@ -326,13 +340,26 @@ class OptionsDialog(wx.Dialog):
             return self._fail(2, self.download_dir, "Choose a download folder.")
         if self.proxy_mode.GetSelection() == 2 and not self.proxy_url.GetValue().strip():
             return self._fail(1, self.proxy_url, "Enter the proxy address, or choose another proxy option.")
+        timed = parse_size(self.timed_limit.GetValue() or "0")
+        if timed is None:
+            return self._fail(1, self.timed_limit, "Write the limit like 200K or 1M, or 0.")
+        t_start, t_end = self.timed_limit_start.GetValue().strip(), self.timed_limit_end.GetValue().strip()
+        if self.timed_limit_enabled.GetValue() and not (TIME_RE.match(t_start) and TIME_RE.match(t_end)):
+            return self._fail(1, self.timed_limit_start, "Write the hours like 08:00 and 23:00.")
+        stall = parse_size(self.stall_speed.GetValue() or "0")
+        if stall is None:
+            return self._fail(1, self.stall_speed, "Write the speed like 1K, or 0.")
+        for event, field in self.sound_fields.items():
+            chosen = field.GetValue().strip()
+            if chosen and not os.path.isfile(chosen):
+                return self._fail(0, field, f"The sound file for {event} was not found.")
 
         for name in (
             "start_with_windows", "close_to_tray", "clipboard_monitor", "show_info_dialog",
             "show_complete_dialog", "speak_events", "sound_complete", "notify_complete",
             "scan_after_download", "mark_of_the_web", "speed_limit_enabled", "use_category_folders",
             "browser_capture", "schedule_enabled", "detailed_logging", "check_for_updates",
-            "keep_server_date", "recycle_bin", "keep_awake",
+            "keep_server_date", "recycle_bin", "keep_awake", "timed_limit_enabled",
         ):
             setattr(s, name, getattr(self, name).GetValue())
         s.max_connections = self.max_connections.GetValue()
@@ -343,6 +370,12 @@ class OptionsDialog(wx.Dialog):
         s.proxy_mode = PROXY_MODES[self.proxy_mode.GetSelection()][0]
         s.proxy_url = self.proxy_url.GetValue().strip()
         s.user_agent = self.user_agent.GetValue().strip() or Settings().user_agent
+        s.timed_limit = timed
+        s.timed_limit_start, s.timed_limit_end = t_start or s.timed_limit_start, t_end or s.timed_limit_end
+        s.stall_speed = stall
+        s.stall_seconds = self.stall_seconds.GetValue()
+        s.after_download_command = self.after_download_command.GetValue().strip()
+        s.sounds = {event: field.GetValue().strip() for event, field in self.sound_fields.items() if field.GetValue().strip()}
         s.download_dir = folder
         s.duplicate_action = DUPLICATES[self.duplicate_action.GetSelection()][0]
         s.capture_extensions = [e.lower().lstrip(".") for e in self.capture_extensions.GetValue().split()]

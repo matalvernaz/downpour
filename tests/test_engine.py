@@ -481,3 +481,33 @@ def test_rename_moves_the_partial_file_of_a_paused_download(server, make_engine)
     engine.start([dl.id])
     done = wait_for(engine, dl.id, Status.COMPLETED)
     assert done.path.endswith("early.bin") and os.path.getsize(done.path) == 600_000
+
+
+def test_timed_speed_limit_applies_only_in_its_hours():
+    import time as _time
+
+    from downpour.core.settings import Settings
+
+    s = Settings(speed_limit=1000, speed_limit_enabled=True, timed_limit_enabled=True, timed_limit=50,
+                 timed_limit_start="08:00", timed_limit_end="23:00")
+    day = _time.strptime("2026-10-10 12:00", "%Y-%m-%d %H:%M")
+    night = _time.strptime("2026-10-10 02:00", "%Y-%m-%d %H:%M")
+    assert s.effective_speed_limit(day) == 50
+    assert s.effective_speed_limit(night) == 1000
+    s.timed_limit_start, s.timed_limit_end = "22:00", "06:00"  # wraps past midnight
+    assert s.effective_speed_limit(night) == 50
+    assert s.effective_speed_limit(day) == 1000
+    s.timed_limit_enabled = False
+    assert s.effective_speed_limit(day) == 1000
+
+
+def test_a_crawling_download_is_reconnected(server, make_engine, fast_retry):
+    data = payload(400_000)
+    # The first connection crawls; after the reconnect the server serves at full speed.
+    url = server.add("/crawl.bin", data, delay=0.6, max_range=64 * 1024)
+    engine = make_engine(max_connections=1, stall_speed=50_000, stall_seconds=3)
+    dl = add(engine, url)
+    wait_until(lambda: dl.downloaded > 0, timeout=20, message="first bytes")
+    server.files["/crawl.bin"].delay = 0.0
+    done = wait_for(engine, dl.id, Status.COMPLETED, timeout=60)
+    assert read(done.path) == data

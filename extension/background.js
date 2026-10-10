@@ -1037,6 +1037,10 @@ async function handleCommand(command, tab) {
   if (!tab) [tab] = await api.tabs.query({ active: true, lastFocusedWindow: true });
   const page = pageContext({}, tab);
   if (command === "grab-page-media") return grabMedia(page);
+  if (command === "keep-next-download") {
+    await request({ type: "pass" });
+    return undefined;
+  }
   if (command === "download-focused-link") {
     const link = await focusedLinkIn(tab);
     if (link) return sendLinks([link], page, false);

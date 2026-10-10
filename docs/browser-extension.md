@@ -138,6 +138,8 @@ Notes:
     "Automatically set system focus to focusable elements" is on in NVDA's
     Browse Mode settings. With no focused link, the selected links are used.
   - Alt+Shift+M grabs the video or audio on the page.
+  - Alt+Shift+K lets the browser keep the next download, without turning
+    capture off.
   - Alt+Shift+D opens the Downpour panel.
 - The Downpour panel says whether Downpour is running. It has the capture
   checkboxes, including "Capture downloads on" the current site, which you

@@ -14,6 +14,7 @@ from __future__ import annotations
 import ctypes
 import logging
 import sys
+from pathlib import Path
 
 import wx
 import wx.adv
@@ -84,7 +85,8 @@ class Feedback:
             return
         import winsound
 
-        path = resource_dir() / "sounds" / f"{name}.wav"
+        chosen = (self.settings.sounds or {}).get(name, "")
+        path = Path(chosen) if chosen and Path(chosen).is_file() else resource_dir() / "sounds" / f"{name}.wav"
         try:
             winsound.PlaySound(str(path), winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
         except RuntimeError:

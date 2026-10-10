@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import threading
+import time
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
@@ -70,6 +71,14 @@ class Settings:
     max_active: int = 3
     speed_limit: int = 0  # bytes per second, 0 = unlimited
     speed_limit_enabled: bool = False
+    # A second limit for part of the day ("night mode"); 0 means unlimited then.
+    timed_limit_enabled: bool = False
+    timed_limit: int = 0
+    timed_limit_start: str = "08:00"
+    timed_limit_end: str = "23:00"
+    # A download that crawls below this speed (bytes/s) for this long is reconnected.
+    stall_speed: int = 1024
+    stall_seconds: int = 60
     min_split_size: int = 1024 * 1024
     timeout: float = 30.0
     max_retries: int = 20
@@ -90,6 +99,7 @@ class Settings:
     sort_descending: bool = False
 
     # Feedback
+    sounds: dict[str, str] = field(default_factory=dict)  # event -> .wav path; empty = the built-in sound
     notify_complete: bool = True
     sound_complete: bool = True
     speak_events: bool = True
@@ -99,6 +109,7 @@ class Settings:
     close_to_tray: bool = True
     start_with_windows: bool = False
     scan_after_download: bool = False
+    after_download_command: str = ""  # run for each finished file; [File] is the path
     when_done: str = "nothing"  # nothing | exit | sleep | hibernate | shutdown
     detailed_logging: bool = True  # HTTP exchanges, pipe requests, yt-dlp output; see core/logs.py
 
@@ -119,7 +130,11 @@ class Settings:
     ytdlp_path: str = ""
     ffmpeg_path: str = ""
 
-    def effective_speed_limit(self) -> int:
+    def effective_speed_limit(self, now: "time.struct_time | None" = None) -> int:
+        """The limit that applies now: the timed one during its hours (which
+        may wrap past midnight), else the always-on one, else none."""
+        if self.timed_limit_enabled and _in_window(self.timed_limit_start, self.timed_limit_end, now):
+            return self.timed_limit
         return self.speed_limit if self.speed_limit_enabled else 0
 
     def category_for(self, filename: str) -> Category | None:
@@ -149,6 +164,23 @@ class Settings:
             return False
         ext = os.path.splitext(filename)[1].lower().lstrip(".")
         return ext in self.capture_extensions
+
+
+def _minutes(text: str) -> int | None:
+    try:
+        h, m = text.strip().split(":")
+        return int(h) * 60 + int(m)
+    except ValueError:
+        return None
+
+
+def _in_window(start: str, end: str, now: "time.struct_time | None" = None) -> bool:
+    a, b = _minutes(start), _minutes(end)
+    if a is None or b is None or a == b:
+        return False
+    now = now or time.localtime()
+    t = now.tm_hour * 60 + now.tm_min
+    return a <= t < b if a < b else t >= a or t < b
 
 
 _lock = threading.Lock()

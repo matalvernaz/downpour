@@ -88,6 +88,27 @@ def folder_row(parent: wx.Window, sizer: wx.Sizer, label: str, value: str) -> wx
     return ctrl
 
 
+def file_row(parent: wx.Window, sizer: wx.Sizer, label: str, value: str, wildcard: str = "All files|*.*") -> wx.TextCtrl:
+    """A file field with a Browse button after it."""
+    sizer.Add(wx.StaticText(parent, label=label), 0, wx.LEFT | wx.RIGHT | wx.TOP, 6)
+    row = wx.BoxSizer(wx.HORIZONTAL)
+    ctrl = wx.TextCtrl(parent, value=value)
+    set_accessible_name(ctrl, plain(label))
+    row.Add(ctrl, 1, wx.EXPAND | wx.RIGHT, 6)
+    browse = wx.Button(parent, label="Browse...")
+    row.Add(browse, 0)
+    sizer.Add(row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+
+    def on_browse(_evt):
+        with wx.FileDialog(parent, "Choose a file", wildcard=wildcard, style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as dlg:
+            if dlg.ShowModal() == wx.ID_OK:
+                ctrl.SetValue(dlg.GetPath())
+                ctrl.SetFocus()
+
+    browse.Bind(wx.EVT_BUTTON, on_browse)
+    return ctrl
+
+
 def buttons(parent: wx.Window, sizer: wx.Sizer, specs: list[tuple[int, str]], default: int | None = None) -> dict[int, wx.Button]:
     """A right-aligned row of buttons. ``specs`` are (id, label) pairs."""
     row = wx.BoxSizer(wx.HORIZONTAL)
