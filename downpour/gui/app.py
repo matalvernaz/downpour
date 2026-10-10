@@ -549,9 +549,16 @@ class Controller:
             if self._modal(dlg) != wx.ID_OK:
                 return
             values, new_url = dlg.values, dlg.new_url
+            new_name, new_folder = dlg.new_name, dlg.new_folder
         for key, value in values.items():
             setattr(dl, key, value)
         self.engine.update(dl)
+        if (new_name and new_name != dl.filename) or (new_folder and os.path.normcase(new_folder) != os.path.normcase(dl.directory)):
+            try:
+                self.engine.relocate(dl.id, new_name, new_folder)
+                self.feedback.say(f"Now {dl.display_name()}")
+            except ValueError as e:
+                forms.message(self._parent(), str(e), icon=wx.ICON_WARNING)
         if new_url != dl.url:
             self.engine.refresh_url(dl.id, new_url)
             self.feedback.say("Address changed")

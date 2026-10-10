@@ -27,6 +27,42 @@ COLUMNS = (
     ("Time left", 150),
     ("Added", 140),
 )
+COLUMN_NAMES = [name for name, _ in COLUMNS]
+
+SORTS = [
+    ("queue", "Queue order"),
+    ("name", "Name"),
+    ("status", "Status"),
+    ("size", "Size"),
+    ("added", "Date added"),
+]
+
+_STATUS_ORDER = {s: i for i, s in enumerate((
+    Status.DOWNLOADING, Status.CONNECTING, Status.FINISHING, Status.QUEUED, Status.PAUSED, Status.FAILED, Status.COMPLETED,
+))}
+
+
+def sort_rows(rows: list[Download], key: str, descending: bool) -> list[Download]:
+    """Rows in the chosen order; "queue" is the engine's own order."""
+    if key == "name":
+        rows = sorted(rows, key=lambda d: d.display_name().lower())
+    elif key == "status":
+        rows = sorted(rows, key=lambda d: (_STATUS_ORDER.get(d.status, 99), d.display_name().lower()))
+    elif key == "size":
+        rows = sorted(rows, key=lambda d: (d.size if d.size is not None else -1))
+    elif key == "added":
+        rows = sorted(rows, key=lambda d: d.added_at)
+    else:
+        rows = list(rows)
+    return rows[::-1] if descending else rows
+
+
+def matches(dl: Download, words: list[str]) -> bool:
+    """Does every search word occur in the name, address or description?"""
+    if not words:
+        return True
+    haystack = f"{dl.display_name()} {dl.url} {dl.description}".lower()
+    return all(word in haystack for word in words)
 
 
 def status_text(dl: Download) -> str:
@@ -88,17 +124,28 @@ def summary(dl: Download) -> str:
 
 
 class DownloadList(wx.ListCtrl):
-    def __init__(self, parent: wx.Window):
+    def __init__(self, parent: wx.Window, columns: list[str] | None = None):
         super().__init__(parent, style=wx.LC_REPORT | wx.LC_VIRTUAL)
-        for i, (title, width) in enumerate(COLUMNS):
-            self.InsertColumn(i, title, width=width)
         set_accessible_name(self, "Downloads")
         self.rows: list[Download] = []
+        self.shown: list[int] = []  # indexes into COLUMNS, in display order
+        self.set_columns(columns)
         self.SetItemCount(0)
+
+    def set_columns(self, names: list[str] | None) -> None:
+        """Show these columns, in COLUMNS order; the name always stays."""
+        wanted = set(names or COLUMN_NAMES) | {"Name"}
+        self.shown = [i for i, (title, _) in enumerate(COLUMNS) if title in wanted]
+        self.DeleteAllColumns()
+        for pos, i in enumerate(self.shown):
+            title, width = COLUMNS[i]
+            self.InsertColumn(pos, title, width=width)
+        if self.rows:
+            self.RefreshItems(0, len(self.rows) - 1)
 
     def OnGetItemText(self, item: int, col: int) -> str:  # noqa: N802 - wx API
         try:
-            return cell(self.rows[item], col)
+            return cell(self.rows[item], self.shown[col])
         except IndexError:
             return ""
 

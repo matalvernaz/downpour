@@ -17,7 +17,7 @@ from downpour.core.models import ACTIVE, Download, Status
 from downpour.core.units import format_speed
 from downpour.gui import forms
 from downpour.gui.a11y import set_accessible_name
-from downpour.gui.download_list import DownloadList, summary
+from downpour.gui.download_list import COLUMN_NAMES, SORTS, DownloadList, matches, sort_rows, summary
 
 if TYPE_CHECKING:
     from downpour.gui.app import Controller
@@ -104,8 +104,14 @@ class MainFrame(wx.Frame):
         left.Add(self.filter_list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
         outer.Add(left, 0, wx.EXPAND)
         right = wx.BoxSizer(wx.VERTICAL)
+        search_row = wx.BoxSizer(wx.HORIZONTAL)
+        search_row.Add(wx.StaticText(panel, label="&Search:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 6)
+        self.search = wx.TextCtrl(panel)
+        set_accessible_name(self.search, "Search the download list")
+        search_row.Add(self.search, 1, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+        right.Add(search_row, 0, wx.EXPAND)
         right.Add(wx.StaticText(panel, label="Download &list:"), 0, wx.ALL, 6)
-        self.list = DownloadList(panel)
+        self.list = DownloadList(panel, self.settings.columns)
         right.Add(self.list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
         outer.Add(right, 1, wx.EXPAND)
         panel.SetSizer(outer)
@@ -113,6 +119,8 @@ class MainFrame(wx.Frame):
 
         self._build_menus()
         self.filter_list.Bind(wx.EVT_LISTBOX, lambda e: self.refresh())
+        self.search.Bind(wx.EVT_TEXT, lambda e: self.refresh())
+        self.search.Bind(wx.EVT_KEY_DOWN, self._on_search_key)
         self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_activate)
         self.list.Bind(wx.EVT_CONTEXT_MENU, self._on_context_menu)
         self.list.Bind(wx.EVT_KEY_DOWN, self._on_list_key)
@@ -180,6 +188,22 @@ class MainFrame(wx.Frame):
         view = wx.Menu()
         for i, f in enumerate(self.filters[:6]):
             self._item(view, f"{f.label}\tCtrl+{i + 1}", lambda e, i=i: self.set_filter(i))
+        view.AppendSeparator()
+        self._item(view, "&Search the list\tCtrl+F", lambda e: self.focus_search())
+        sort = wx.Menu()
+        self.sort_items = []
+        for key, label in SORTS:
+            item = self._item(sort, label, lambda e, k=key: self.set_sort(k), kind=wx.ITEM_RADIO)
+            self.sort_items.append((key, item))
+        sort.AppendSeparator()
+        self.sort_desc_item = self._item(sort, "&Reverse order", lambda e: self.toggle_sort_direction(), kind=wx.ITEM_CHECK)
+        view.AppendSubMenu(sort, "S&ort by")
+        cols = wx.Menu()
+        self.column_items = []
+        for name in COLUMN_NAMES[1:]:  # the name column always shows
+            item = self._item(cols, name, lambda e, n=name: self.toggle_column(n), kind=wx.ITEM_CHECK)
+            self.column_items.append((name, item))
+        view.AppendSubMenu(cols, "&Columns")
         bar.Append(view, "&View")
 
         opts = wx.Menu()
@@ -225,7 +249,48 @@ class MainFrame(wx.Frame):
         for key, item in self.done_items:
             if key == s.when_done:
                 item.Check(True)
+        for key, item in self.sort_items:
+            if key == s.sort_by:
+                item.Check(True)
+        self.sort_desc_item.Check(s.sort_descending)
+        for name, item in self.column_items:
+            item.Check(name in s.columns)
         evt.Skip()
+
+    # -- search, sort and columns ----------------------------------------------------
+
+    def focus_search(self) -> None:
+        self.search.SetFocus()
+        self.search.SelectAll()
+
+    def _on_search_key(self, evt):
+        key = evt.GetKeyCode()
+        if key == wx.WXK_ESCAPE:
+            if self.search.GetValue():
+                self.search.SetValue("")
+            self.list.SetFocus()
+            return
+        if key in (wx.WXK_RETURN, wx.WXK_DOWN):
+            self.list.SetFocus()
+            return
+        evt.Skip()
+
+    def set_sort(self, key: str) -> None:
+        self.settings.sort_by = key
+        self.ctl.apply_settings()
+        self.refresh()
+
+    def toggle_sort_direction(self) -> None:
+        self.settings.sort_descending = not self.settings.sort_descending
+        self.ctl.apply_settings()
+        self.refresh()
+
+    def toggle_column(self, name: str) -> None:
+        shown = [c for c in COLUMN_NAMES if (c in self.settings.columns) != (c == name)]
+        self.settings.columns = shown
+        self.ctl.apply_settings()
+        self.list.set_columns(shown)
+        self.refresh()
 
     # -- refresh --------------------------------------------------------------
 
@@ -251,7 +316,9 @@ class MainFrame(wx.Frame):
         if not self.IsShown():
             return
         test = self.current_filter().test
-        self.list.set_rows([d for d in self.engine.downloads() if test(d)])
+        words = self.search.GetValue().lower().split()
+        rows = [d for d in self.engine.downloads() if test(d) and matches(d, words)]
+        self.list.set_rows(sort_rows(rows, self.settings.sort_by, self.settings.sort_descending))
         running, queued, speed = self.engine.totals()
         if running:
             text = f"{running} downloading at {format_speed(speed) or '0 bytes/s'}"

@@ -327,6 +327,42 @@ class Engine:
                 task.stop(Status.PAUSED)
         self._emit("changed", dl)
 
+    def relocate(self, download_id: int, filename: str | None = None, directory: str | None = None) -> Download:
+        """Rename a download and/or move it to another folder. Works on
+        finished files and on paused, failed or queued downloads (their
+        .part file moves with them); refuses while the download runs.
+        The new name is made unique the usual way. Returns the download."""
+        with self._lock:
+            dl = self._downloads.get(download_id)
+            if dl is None:
+                raise ValueError("That download is no longer in the list")
+            if download_id in self._tasks:
+                raise ValueError("Pause the download first, then rename or move it")
+            new_name = filenames.sanitize(filename) if filename else dl.filename
+            new_dir = directory or dl.directory
+            if not new_name:
+                raise ValueError("The download has no name yet")
+            if new_name == dl.filename and os.path.normcase(new_dir) == os.path.normcase(dl.directory):
+                return dl
+            os.makedirs(new_dir, exist_ok=True)
+            old_path, old_part = dl.path, dl.part_path
+            target = self.claim_path(dl, Path(new_dir) / new_name)
+            moved = []
+            try:
+                if dl.status == Status.COMPLETED and old_path and os.path.exists(old_path):
+                    os.replace(old_path, target)
+                    moved.append(target)
+                elif old_part and os.path.exists(old_part):
+                    os.replace(old_part, str(target) + ".part")
+                    moved.append(str(target) + ".part")
+            except OSError as e:
+                raise ValueError(f"Could not move the file: {e.strerror or e}") from e
+            dl.directory, dl.filename, dl.filename_fixed = str(target.parent), target.name, True
+            self.save(dl)
+        log.info("download %s: now %s%s", dl.id, dl.path, " (file moved)" if moved else "")
+        self._emit("changed", dl)
+        return dl
+
     def update(self, dl: Download) -> None:
         """Persist edits the GUI made to a download's details."""
         log.debug("download %s: details edited", dl.id)

@@ -476,6 +476,12 @@ class PropertiesDialog(wx.Dialog):
         self.dl = dl
         sizer = wx.BoxSizer(wx.VERTICAL)
         self.details = forms.readonly(self, sizer, "&Details:", details_text(dl, running), lines=12)
+        self.filename = forms.text(self, sizer, "File &name:", dl.filename)
+        self.folder = forms.folder_row(self, sizer, "&Folder:", dl.directory)
+        if running:
+            for ctrl in (self.filename, self.folder):
+                ctrl.Disable()
+                ctrl.SetToolTip("Pause the download to rename or move it")
         self.address = forms.text(self, sizer, "&Address (change it to renew an expired link):", dl.url)
         self.limit = forms.text(
             self, sizer, "Speed &limit for this download (for example 500K or 2M; empty for none):",
@@ -510,6 +516,12 @@ class PropertiesDialog(wx.Dialog):
             self.address.SetFocus()
             return
         self.new_url = found[0]
+        self.new_name = self.filename.GetValue().strip() if self.filename.IsEnabled() else self.dl.filename
+        self.new_folder = self.folder.GetValue().strip() if self.folder.IsEnabled() else self.dl.directory
+        if self.filename.IsEnabled() and not self.new_name:
+            forms.message(self, "Give the file a name.", icon=wx.ICON_WARNING)
+            self.filename.SetFocus()
+            return
         self.values = dict(
             speed_limit=limit,
             connections=self.connections.GetValue(),

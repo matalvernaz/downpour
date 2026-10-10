@@ -451,3 +451,33 @@ def test_finished_file_gets_the_server_date(server, make_engine):
 
     expected = email.utils.parsedate_to_datetime(dl.last_modified).timestamp()
     assert abs(os.path.getmtime(dl.path) - expected) < 2
+
+
+def test_rename_and_move_a_finished_download(server, make_engine, tmp_path):
+    url = server.add("/move.txt", payload(3_000))
+    engine = make_engine()
+    dl = wait_for(engine, add(engine, url).id, Status.COMPLETED)
+    old = dl.path
+    engine.relocate(dl.id, "renamed.txt", str(tmp_path / "elsewhere"))
+    assert dl.filename == "renamed.txt" and dl.directory == str(tmp_path / "elsewhere")
+    assert os.path.exists(dl.path) and not os.path.exists(old)
+    # A name that is taken gets numbered, like a new download would.
+    other = wait_for(engine, add(engine, url).id, Status.COMPLETED)
+    engine.relocate(other.id, "renamed.txt", str(tmp_path / "elsewhere"))
+    assert other.filename == "renamed (2).txt"
+
+
+def test_rename_moves_the_partial_file_of_a_paused_download(server, make_engine):
+    url = server.add("/slow.bin", payload(600_000), delay=0.05)
+    engine = make_engine(max_connections=1)
+    dl = add(engine, url)
+    wait_until(lambda: dl.downloaded > 0, message="some bytes")
+    with pytest.raises(ValueError):
+        engine.relocate(dl.id, "early.bin")  # still running
+    engine.pause([dl.id])
+    wait_for(engine, dl.id, Status.PAUSED)
+    engine.relocate(dl.id, "early.bin")
+    assert dl.filename == "early.bin" and os.path.exists(dl.part_path)
+    engine.start([dl.id])
+    done = wait_for(engine, dl.id, Status.COMPLETED)
+    assert done.path.endswith("early.bin") and os.path.getsize(done.path) == 600_000

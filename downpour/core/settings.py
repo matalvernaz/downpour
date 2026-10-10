@@ -84,6 +84,11 @@ class Settings:
     clipboard_monitor: bool = True
     show_info_dialog: bool = True
 
+    # The list
+    columns: list[str] = field(default_factory=lambda: ["Name", "Status", "Size", "Speed", "Time left", "Added"])
+    sort_by: str = "queue"  # queue | name | status | size | added
+    sort_descending: bool = False
+
     # Feedback
     notify_complete: bool = True
     sound_complete: bool = True

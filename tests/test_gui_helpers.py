@@ -36,3 +36,22 @@ def test_recycle_refuses_missing_files(tmp_path):
     from downpour.core import winutil
 
     assert winutil.recycle(str(tmp_path / "nothing.txt")) is False
+
+
+def test_sorting_and_searching_the_list():
+    from downpour.core.models import Download, Status
+    from downpour.gui.download_list import matches, sort_rows
+
+    a = Download(url="https://x/a.zip", filename="alpha.zip", size=5, added_at=2.0, status=Status.COMPLETED)
+    b = Download(url="https://x/b.zip", filename="Beta.zip", size=50, added_at=1.0, status=Status.DOWNLOADING)
+    c = Download(url="https://x/c.zip", filename="gamma.zip", size=None, added_at=3.0, status=Status.PAUSED, description="Book one")
+    rows = [a, b, c]
+    assert sort_rows(rows, "queue", False) == rows
+    assert sort_rows(rows, "name", False) == [a, b, c]
+    assert sort_rows(rows, "name", True) == [c, b, a]
+    assert sort_rows(rows, "size", False) == [c, a, b]
+    assert sort_rows(rows, "added", False) == [b, a, c]
+    assert sort_rows(rows, "status", False) == [b, c, a]
+    assert [d for d in rows if matches(d, ["zip"])] == rows
+    assert [d for d in rows if matches(d, ["book", "gamma"])] == [c]
+    assert [d for d in rows if matches(d, ["nothing"])] == []
