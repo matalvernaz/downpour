@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from downpour.core import filenames
-from downpour.core.media import found_streams
+from downpour.core.media import found_streams, stream_downloads
 
 
 def test_found_streams_keep_only_web_addresses_and_known_kinds():
@@ -45,3 +45,24 @@ def test_media_extension_prefers_the_address_then_the_type():
     assert filenames.media_extension("https://x/stream/abc", "audio/x-m4a") == ".m4a"
     assert filenames.media_extension("https://x/stream/abc", "audio/flac") == ".flac"
     assert filenames.media_extension("https://x/stream/abc", "") == ""
+
+
+def test_several_streams_download_in_play_order_with_numbers():
+    newest_first = found_streams([
+        {"url": "https://cdn.example.com/ch3", "mime": "audio/mp4"},
+        {"url": "https://cdn.example.com/master.m3u8", "kind": "hls"},
+        {"url": "https://cdn.example.com/ch1", "mime": "audio/mp4"},
+    ])
+    downloads = stream_downloads(newest_first, "https://example.com/book", "Book 1", "UA/1", "best-mp4")
+    assert [d.url for d in downloads] == [
+        "https://cdn.example.com/ch1", "https://cdn.example.com/master.m3u8", "https://cdn.example.com/ch3",
+    ]
+    assert [d.filename for d in downloads] == ["Book 1 - 1.m4a", "Book 1 - 2.mp4", "Book 1 - 3.m4a"]
+    assert downloads[1].kind == "media" and downloads[1].media_format == "best-mp4"
+    assert all(d.referrer == "https://example.com/book" for d in downloads)
+
+
+def test_one_stream_keeps_the_plain_title():
+    [only] = stream_downloads(found_streams([{"url": "https://cdn.example.com/a", "mime": "audio/mpeg"}]),
+                              "https://example.com/p", "Book 1", "UA", "best-mp4")
+    assert only.filename == "Book 1.mp3"

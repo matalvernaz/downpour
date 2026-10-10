@@ -6,6 +6,7 @@ import re
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import wx
 
@@ -338,6 +339,82 @@ class LinkPickerDialog(wx.Dialog):
                 dl.directory = folder
         self.items = chosen
         self.start_now = start
+        self.EndModal(wx.ID_OK)
+
+
+class StreamPickerDialog(wx.Dialog):
+    """Choose which of the streams a page played to download (Grab video or
+    audio), with the same checkbox list as LinkPickerDialog, which screen
+    readers read row by row. yt-dlp on the page stays one button away.
+
+    Afterwards: ``chosen`` (the checked streams), ``start_now``,
+    ``folder_path`` and ``use_ytdlp``.
+    """
+
+    def __init__(self, parent: wx.Window | None, streams: list):
+        super().__init__(parent, title="Grab video or audio", style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self.streams = streams
+        self.chosen: list = []
+        self.start_now = True
+        self.use_ytdlp = False
+        self.folder_path = ""
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        noun = "stream" if len(streams) == 1 else "streams"
+        sizer.Add(wx.StaticText(self, label=f"The page played {len(streams)} audio or video {noun}, newest first. "
+                                "&Streams, Space checks or unchecks:"), 0, wx.ALL, 6)
+        self.list = wx.ListCtrl(self, style=wx.LC_REPORT)
+        self.list.EnableCheckBoxes(True)
+        set_accessible_name(self.list, "Streams")
+        self.list.InsertColumn(0, "Stream", width=430)
+        self.list.InsertColumn(1, "Address", width=430)
+        for i, stream in enumerate(streams):
+            parts = urlsplit(stream.url)
+            self.list.InsertItem(i, stream.label())
+            self.list.SetItem(i, 1, f"{parts.hostname or ''}{parts.path}"[:150])
+            self.list.CheckItem(i, True)
+        sizer.Add(self.list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 6)
+
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        for label, value in (("Check &all", True), ("&Uncheck all", False)):
+            b = wx.Button(self, label=label)
+            b.Bind(wx.EVT_BUTTON, lambda e, v=value: self._check_all(v))
+            row.Add(b, 0, wx.RIGHT, 6)
+        sizer.Add(row, 0, wx.ALL, 6)
+        self.folder = forms.folder_row(self, sizer, "Save &to (leave empty to sort into category folders):", "")
+        btns = forms.buttons(
+            self, sizer,
+            [(wx.ID_OK, "&Start downloads"), (wx.ID_APPLY, "Download &later"),
+             (wx.ID_MORE, "Look on the page with &yt-dlp instead"), (wx.ID_CANCEL, "Cancel")],
+            default=wx.ID_OK,
+        )
+        self.SetSizer(sizer)
+        self.SetSize((920, 460))
+        self.CentreOnParent()
+        if streams:
+            self.list.Focus(0)
+            self.list.Select(0)
+        self.list.SetFocus()
+        btns[wx.ID_OK].Bind(wx.EVT_BUTTON, lambda e: self._finish(True))
+        btns[wx.ID_APPLY].Bind(wx.EVT_BUTTON, lambda e: self._finish(False))
+        btns[wx.ID_MORE].Bind(wx.EVT_BUTTON, self._ytdlp)
+
+    def _check_all(self, value: bool):
+        for i in range(self.list.GetItemCount()):
+            self.list.CheckItem(i, value)
+        self.list.SetFocus()
+
+    def _finish(self, start: bool):
+        chosen = [s for i, s in enumerate(self.streams) if self.list.IsItemChecked(i)]
+        if not chosen:
+            forms.message(self, "Check at least one stream, or choose Cancel.", icon=wx.ICON_WARNING)
+            self.list.SetFocus()
+            return
+        self.chosen, self.start_now = chosen, start
+        self.folder_path = self.folder.GetValue().strip()
+        self.EndModal(wx.ID_OK)
+
+    def _ytdlp(self, evt):
+        self.use_ytdlp = True
         self.EndModal(wx.ID_OK)
 
 

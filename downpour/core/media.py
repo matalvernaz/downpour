@@ -492,6 +492,27 @@ class FoundStream:
         )
 
 
+def stream_downloads(streams: list[FoundStream], page_url: str, title: str, user_agent: str,
+                     media_format: str) -> list[Download]:
+    """Downloads for the chosen streams, in the order the page played them
+    (oldest first), numbered after the page title when there are several.
+    Files download directly; playlists go to yt-dlp."""
+    ordered = list(reversed(streams))  # "found" lists are newest first
+    base = title.strip() or "media"
+    out = []
+    for n, stream in enumerate(ordered, start=1):
+        name = f"{base} - {n}" if len(ordered) > 1 else base
+        if stream.is_playlist:
+            out.append(Download(
+                url=stream.url, kind="media", media_format=media_format, filename=filenames.sanitize(f"{name}.mp4"),
+                filename_fixed=True, referrer=page_url, page_url=page_url, description=title,
+                cookies=stream.cookies, user_agent=user_agent,
+            ))
+        else:
+            out.append(stream.download(page_url, name, user_agent))
+    return out
+
+
 def found_streams(raw: object) -> list[FoundStream]:
     """The usable entries of a media request's "found" list, newest first."""
     out = []

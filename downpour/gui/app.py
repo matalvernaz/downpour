@@ -33,6 +33,7 @@ from downpour.gui.dialogs import (
     DownloadInfoDialog,
     LinkPickerDialog,
     PropertiesDialog,
+    StreamPickerDialog,
     clipboard_text,
     item_to_download,
     urls_in,
@@ -442,40 +443,34 @@ class Controller:
                         return
                     page = dlg.urls[0]
             if found:
-                stream = self._choose_stream(found)
-                if stream is None:
-                    return  # cancelled
-                if stream != "page":
-                    self._grab_stream(stream, page, title, user_agent)
+                with StreamPickerDialog(self._parent(), found) as dlg:
+                    if self._modal(dlg) != wx.ID_OK:
+                        log.info("grab cancelled at the list of streams")
+                        return
+                    chosen, start, folder, use_ytdlp = dlg.chosen, dlg.start_now, dlg.folder_path, dlg.use_ytdlp
+                if not use_ytdlp:
+                    self._add_streams(chosen, page, title, user_agent, start, folder)
                     return
+                log.info("grab: the user chose yt-dlp on the page instead of the streams it played")
             self._grab_with_ytdlp(page, cookies, user_agent, referrer)
 
         self._queue_dialog(show)
 
-    def _choose_stream(self, found: list):
-        """Which of the streams the page played to download, "page" for
-        yt-dlp on the page itself, or None when cancelled."""
-        choices = [stream.label() for stream in found] + ["None of these: look for video and audio on the page with yt-dlp"]
-        noun = "stream" if len(found) == 1 else "streams"
-        with wx.SingleChoiceDialog(self._parent(), f"The page played {len(found)} audio or video {noun}, newest first. Download:",
-                                   "Grab video or audio", choices) as dlg:
-            dlg.SetSelection(0)
-            if self._modal(dlg) != wx.ID_OK:
-                log.info("grab cancelled at the choice of streams")
-                return None
-            index = dlg.GetSelection()
-        if index >= len(found):
-            log.info("grab: the user chose yt-dlp on the page")
-            return "page"
-        log.info("grab: the user chose %s", found[index].label())
-        return found[index]
-
-    def _grab_stream(self, stream, page: str, title: str, user_agent: str) -> None:
-        if stream.is_playlist:
-            # yt-dlp reads HLS and DASH playlists itself, given the page as referrer.
-            self._grab_with_ytdlp(stream.url, stream.cookies, user_agent, page)
-            return
-        self._confirm_download(stream.download(page, title, user_agent), interactive=True)
+    def _add_streams(self, chosen: list, page: str, title: str, user_agent: str, start: bool, folder: str) -> None:
+        added = 0
+        for dl in media.stream_downloads(chosen, page, title, user_agent, self.settings.media_format):
+            if folder:
+                dl.directory = folder
+            try:
+                self.engine.add(dl, start=start, force=start)
+            except ValueError as e:
+                log.warning("could not add the stream %s: %s", redact_url(dl.url), e)
+                continue
+            added += 1
+        log.info("grab: added %d of %d chosen streams%s", added, len(chosen), "" if start else ", paused")
+        if added:
+            self.feedback.play("added")
+            self.feedback.say(f"{added} {'stream' if added == 1 else 'streams'} added" + ("" if start else ", paused"))
 
     def _grab_with_ytdlp(self, page: str, cookies: list[dict] | None, user_agent: str, referrer: str) -> None:
         if not self.ensure_ytdlp():
