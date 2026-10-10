@@ -13,6 +13,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from downpour.core.paths import data_dir, downloads_dir
 
@@ -39,9 +40,14 @@ class Category:
     name: str
     extensions: list[str]
     folder: str = ""  # empty = <download_dir>\<name>
+    sites: list[str] = field(default_factory=list)  # host names; a subdomain of one counts too
 
     def matches(self, ext: str) -> bool:
         return ext.lower().lstrip(".") in self.extensions
+
+    def matches_site(self, host: str) -> bool:
+        host = (host or "").lower()
+        return any(host == site or host.endswith("." + site) for site in (s.lower().lstrip(".") for s in self.sites) if site)
 
 
 def default_categories() -> list[Category]:
@@ -142,7 +148,14 @@ class Settings:
             return self.timed_limit
         return self.speed_limit if self.speed_limit_enabled else 0
 
-    def category_for(self, filename: str) -> Category | None:
+    def category_for(self, filename: str, url: str = "") -> Category | None:
+        """The category for a download: one naming its site wins, then one
+        naming its file type."""
+        if url:
+            host = urlsplit(url).hostname or ""
+            for cat in self.categories:
+                if cat.matches_site(host):
+                    return cat
         ext = os.path.splitext(filename)[1]
         if not ext:
             return None
@@ -151,11 +164,11 @@ class Settings:
                 return cat
         return None
 
-    def folder_for(self, filename: str) -> Path:
+    def folder_for(self, filename: str, url: str = "") -> Path:
         base = Path(self.download_dir)
         if not self.use_category_folders:
             return base
-        cat = self.category_for(filename)
+        cat = self.category_for(filename, url)
         if cat is None:
             return base
         if cat.folder:

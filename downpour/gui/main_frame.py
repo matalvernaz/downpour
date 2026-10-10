@@ -77,12 +77,12 @@ def build_filters(controller: "Controller") -> list[Filter]:
         Filter("Failed", lambda d: d.status == Status.FAILED),
     ]
     def in_category(d: Download, name: str) -> bool:
-        cat = s.category_for(d.filename)
+        cat = s.category_for(d.filename, d.url)
         return cat is not None and cat.name == name
 
     for cat in s.categories:
         out.append(Filter(cat.name, lambda d, n=cat.name: in_category(d, n)))
-    out.append(Filter("Other files", lambda d: s.category_for(d.filename) is None))
+    out.append(Filter("Other files", lambda d: s.category_for(d.filename, d.url) is None))
     return out
 
 

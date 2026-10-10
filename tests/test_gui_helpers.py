@@ -55,3 +55,14 @@ def test_sorting_and_searching_the_list():
     assert [d for d in rows if matches(d, ["zip"])] == rows
     assert [d for d in rows if matches(d, ["book", "gamma"])] == [c]
     assert [d for d in rows if matches(d, ["nothing"])] == []
+
+
+def test_categories_match_sites_before_file_types():
+    from downpour.core.settings import Category, Settings
+
+    s = Settings(categories=[Category("Books", ["epub"], sites=["archive.org"]), Category("Music", ["mp3"])])
+    assert s.category_for("x.mp3", "https://dl.archive.org/a/x.mp3").name == "Books"
+    assert s.category_for("x.mp3", "https://example.com/x.mp3").name == "Music"
+    assert s.category_for("x.mp3").name == "Music"
+    assert s.category_for("x.txt", "https://example.com/x.txt") is None
+    assert str(s.folder_for("x.mp3", "https://archive.org/x.mp3")).endswith("Books")

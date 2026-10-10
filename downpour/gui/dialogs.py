@@ -144,9 +144,9 @@ class DownloadInfoDialog(wx.Dialog):
         self.address = forms.readonly(self, sizer, "Address:", dl.url)
         self.name = forms.text(self, sizer, "File &name:", dl.filename or filenames.sanitize(filenames.from_url(dl.url)))
         cats = category_names(settings)
-        cat = settings.category_for(self.name.GetValue())
+        cat = settings.category_for(self.name.GetValue(), dl.url)
         self.category = forms.choice(self, sizer, "&Category:", cats, cats.index(cat.name) if cat else 0)
-        self.folder = forms.folder_row(self, sizer, "Save &to:", dl.directory or str(settings.folder_for(self.name.GetValue())))
+        self.folder = forms.folder_row(self, sizer, "Save &to:", dl.directory or str(settings.folder_for(self.name.GetValue(), dl.url)))
         self.checksum = forms.text(self, sizer, "E&xpected checksum (optional):", dl.checksum)
         btns = forms.buttons(
             self, sizer,
@@ -216,7 +216,7 @@ class DownloadInfoDialog(wx.Dialog):
         evt.Skip()
 
     def _sync_category(self):
-        cat = self.settings.category_for(self.name.GetValue())
+        cat = self.settings.category_for(self.name.GetValue(), self.dl.url)
         names = category_names(self.settings)
         index = names.index(cat.name) if cat else 0
         if index != self.category.GetSelection():

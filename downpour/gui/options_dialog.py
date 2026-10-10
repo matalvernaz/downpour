@@ -139,12 +139,21 @@ class OptionsDialog(wx.Dialog):
         self.cat_list.InsertColumn(2, "Folder", width=200)
         self.cat_list.SetMinSize((-1, 150))
         sz.Add(self.cat_list, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        for label, handler in (("&Add category", self._cat_add), ("Re&name category", self._cat_rename),
+                               ("Re&move category", self._cat_remove)):
+            b = wx.Button(p, label=label)
+            b.Bind(wx.EVT_BUTTON, handler)
+            row.Add(b, 0, wx.RIGHT, 6)
+        sz.Add(row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
         self.cat_types = forms.text(p, sz, "File &types of the selected category (separated by spaces):", "")
+        self.cat_sites = forms.text(p, sz, "&Sites of the selected category (host names separated by spaces, for example archive.org):", "")
         self.cat_folder = forms.folder_row(p, sz, "F&older of the selected category (empty for a subfolder of the download folder):", "")
         self._cat_index = -1
         self._fill_categories()
         self.cat_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_cat_selected)
         self.cat_types.Bind(wx.EVT_TEXT, self._on_cat_edit)
+        self.cat_sites.Bind(wx.EVT_TEXT, self._on_cat_edit)
         self.cat_folder.Bind(wx.EVT_TEXT, self._on_cat_edit)
         if self.s.categories:
             self.cat_list.Select(0)
@@ -154,13 +163,14 @@ class OptionsDialog(wx.Dialog):
         self.cat_list.DeleteAllItems()
         for i, cat in enumerate(self.s.categories):
             self.cat_list.InsertItem(i, cat.name)
-            self.cat_list.SetItem(i, 1, " ".join(cat.extensions))
+            self.cat_list.SetItem(i, 1, " ".join(cat.extensions) + (f" (sites: {' '.join(cat.sites)})" if cat.sites else ""))
             self.cat_list.SetItem(i, 2, cat.folder or "(automatic)")
 
     def _on_cat_selected(self, evt):
         self._cat_index = evt.GetIndex()
         cat = self.s.categories[self._cat_index]
         self.cat_types.ChangeValue(" ".join(cat.extensions))
+        self.cat_sites.ChangeValue(" ".join(cat.sites))
         self.cat_folder.ChangeValue(cat.folder)
 
     def _on_cat_edit(self, evt):
@@ -168,10 +178,65 @@ class OptionsDialog(wx.Dialog):
         if 0 <= i < len(self.s.categories):
             cat = self.s.categories[i]
             cat.extensions = [e.lower().lstrip(".") for e in self.cat_types.GetValue().split()]
+            cat.sites = [h.lower().strip().lstrip(".") for h in self.cat_sites.GetValue().split()]
             cat.folder = self.cat_folder.GetValue().strip()
-            self.cat_list.SetItem(i, 1, " ".join(cat.extensions))
+            self.cat_list.SetItem(i, 1, " ".join(cat.extensions) + (f" (sites: {' '.join(cat.sites)})" if cat.sites else ""))
             self.cat_list.SetItem(i, 2, cat.folder or "(automatic)")
         evt.Skip()
+
+    def _ask_name(self, title: str, current: str = "") -> str:
+        with wx.TextEntryDialog(self, "Category name:", title, current) as dlg:
+            if dlg.ShowModal() != wx.ID_OK:
+                return ""
+            name = dlg.GetValue().strip()
+        if not name:
+            return ""
+        if any(c.name.lower() == name.lower() and c is not self._current_cat() for c in self.s.categories):
+            forms.message(self, f"There is already a category called {name}.", icon=wx.ICON_WARNING)
+            return ""
+        return name
+
+    def _current_cat(self):
+        i = self._cat_index
+        return self.s.categories[i] if 0 <= i < len(self.s.categories) else None
+
+    def _cat_add(self, evt):
+        name = self._ask_name("Add category")
+        if not name:
+            return
+        self.s.categories.append(Category(name, []))
+        self._fill_categories()
+        last = len(self.s.categories) - 1
+        self.cat_list.Select(last)
+        self.cat_list.Focus(last)
+        self.cat_types.SetFocus()
+
+    def _cat_rename(self, evt):
+        cat = self._current_cat()
+        if cat is None:
+            return
+        name = self._ask_name("Rename category", cat.name)
+        if name:
+            cat.name = name
+            self.cat_list.SetItem(self._cat_index, 0, name)
+            self.cat_list.SetFocus()
+
+    def _cat_remove(self, evt):
+        cat = self._current_cat()
+        if cat is None:
+            return
+        if not forms.confirm(self, f"Remove the category {cat.name}? Downloaded files stay where they are."):
+            return
+        del self.s.categories[self._cat_index]
+        self._cat_index = -1
+        self._fill_categories()
+        self.cat_types.ChangeValue("")
+        self.cat_sites.ChangeValue("")
+        self.cat_folder.ChangeValue("")
+        if self.s.categories:
+            self.cat_list.Select(0)
+            self.cat_list.Focus(0)
+        self.cat_list.SetFocus()
 
     def _browser(self):
         p, sz = self._page("Browser integration")
@@ -398,7 +463,7 @@ class OptionsDialog(wx.Dialog):
         s.media_metadata = self.media_metadata.GetValue()
         s.ytdlp_path = self.ytdlp_path.GetValue().strip()
         s.ffmpeg_path = self.ffmpeg_path.GetValue().strip()
-        s.categories = [Category(c.name, c.extensions, c.folder) for c in s.categories]
+        s.categories = [Category(c.name, c.extensions, c.folder, list(c.sites)) for c in s.categories]
         for f in fields(Settings):
             setattr(self.live, f.name, getattr(s, f.name))
         evt.Skip()

@@ -288,7 +288,7 @@ class HttpTask:
         dl.etag, dl.last_modified = info.etag, info.last_modified
         if not (dl.filename_fixed and dl.filename):
             dl.filename = net.pick_name(info, dl.url)
-        folder = Path(dl.directory) if dl.directory else settings.folder_for(dl.filename)
+        folder = Path(dl.directory) if dl.directory else settings.folder_for(dl.filename, dl.url)
         folder.mkdir(parents=True, exist_ok=True)
         wanted = folder / dl.filename
         if settings.duplicate_action == "skip" and wanted.exists() and (dl.path or "").lower() != str(wanted).lower():
