@@ -92,6 +92,7 @@ class OptionsDialog(wx.Dialog):
         self.recycle_bin = forms.check(p, sz, "Send deleted files to the &Recycle Bin", s.recycle_bin)
         self.keep_awake = forms.check(p, sz, "Keep the computer a&wake while downloads run", s.keep_awake)
         self.check_for_updates = forms.check(p, sz, "Check for &updates automatically", s.check_for_updates)
+        self.dark_mode = forms.check(p, sz, "Dark colours for the window (takes effect after a restart)", s.dark_mode)
         self.detailed_logging = forms.check(p, sz, "Write detailed &logs for troubleshooting", s.detailed_logging)
         logs_button = wx.Button(p, label="Open the log &folder")
         logs_button.Bind(wx.EVT_BUTTON, self._open_logs)
@@ -430,7 +431,7 @@ class OptionsDialog(wx.Dialog):
             "show_complete_dialog", "speak_events", "sound_complete", "notify_complete",
             "scan_after_download", "mark_of_the_web", "speed_limit_enabled", "use_category_folders",
             "browser_capture", "schedule_enabled", "detailed_logging", "check_for_updates",
-            "keep_server_date", "recycle_bin", "keep_awake", "timed_limit_enabled",
+            "keep_server_date", "recycle_bin", "keep_awake", "timed_limit_enabled", "dark_mode",
         ):
             setattr(s, name, getattr(self, name).GetValue())
         s.max_connections = self.max_connections.GetValue()

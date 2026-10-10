@@ -66,3 +66,15 @@ def test_categories_match_sites_before_file_types():
     assert s.category_for("x.mp3").name == "Music"
     assert s.category_for("x.txt", "https://example.com/x.txt") is None
     assert str(s.folder_for("x.mp3", "https://archive.org/x.mp3")).endswith("Books")
+
+
+def test_recent_folders_dedupe_and_stay_short():
+    from downpour.core import settings as settings_mod
+
+    s = settings_mod.Settings()
+    for i in range(12):
+        settings_mod.remember_folder(s, rf"C:\f{i}")
+    settings_mod.remember_folder(s, r"c:\F11")  # same as the newest, other case
+    settings_mod.remember_folder(s, "")
+    assert len(s.recent_folders) == settings_mod.RECENT_FOLDERS
+    assert s.recent_folders[0] == r"c:\F11" and r"C:\f11" not in s.recent_folders

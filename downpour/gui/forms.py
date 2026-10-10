@@ -67,11 +67,13 @@ def check(parent: wx.Window, sizer: wx.Sizer, label: str, value: bool) -> wx.Che
     return ctrl
 
 
-def folder_row(parent: wx.Window, sizer: wx.Sizer, label: str, value: str) -> wx.TextCtrl:
-    """A folder field with a Browse button after it."""
+def folder_row(parent: wx.Window, sizer: wx.Sizer, label: str, value: str, recent: list[str] | None = None) -> wx.ComboBox:
+    """A folder field with a Browse button after it. The field is a combo box
+    whose list holds the recent folders (Alt+Down opens it); typing works as
+    in a plain field."""
     sizer.Add(wx.StaticText(parent, label=label), 0, wx.LEFT | wx.RIGHT | wx.TOP, 6)
     row = wx.BoxSizer(wx.HORIZONTAL)
-    ctrl = wx.TextCtrl(parent, value=value)
+    ctrl = wx.ComboBox(parent, value=value, choices=list(recent or []), style=wx.CB_DROPDOWN)
     set_accessible_name(ctrl, plain(label))
     row.Add(ctrl, 1, wx.EXPAND | wx.RIGHT, 6)
     browse = wx.Button(parent, label="&Browse...")

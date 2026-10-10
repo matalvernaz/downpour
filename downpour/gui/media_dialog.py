@@ -45,7 +45,7 @@ class MediaDialog(wx.Dialog):
         self.quality.SetMinSize((-1, 180))
         sizer.Add(self.quality, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
         self.name = forms.text(self, sizer, "File &name:", "")
-        self.folder = forms.folder_row(self, sizer, "Save &to:", folder_for_category(settings, "Video"))
+        self.folder = forms.folder_row(self, sizer, "Save &to:", folder_for_category(settings, "Video"), settings.recent_folders)
         self.whole_playlist = forms.check(self, sizer, "Download every item in the &playlist", True)
         self.whole_playlist.Hide()
         self.audio_language = forms.text(

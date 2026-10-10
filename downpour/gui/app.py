@@ -104,6 +104,8 @@ class Controller:
     # -- engine events (any thread) -------------------------------------------
 
     def _on_engine_event(self, event: str, dl: Download | None) -> None:
+        if event == "added" and dl is not None and dl.directory:
+            settings_mod.remember_folder(self.settings, dl.directory)
         if event in ("completed", "failed", "idle", "added", "removed"):
             wx.CallAfter(self._handle_event, event, dl)
 
@@ -455,7 +457,7 @@ class Controller:
                         return
                     page = dlg.urls[0]
             if found:
-                with StreamPickerDialog(self._parent(), found) as dlg:
+                with StreamPickerDialog(self._parent(), found, self.settings.recent_folders) as dlg:
                     if self._modal(dlg) != wx.ID_OK:
                         log.info("grab cancelled at the list of streams")
                         return
@@ -559,7 +561,7 @@ class Controller:
     # -- other dialogs ----------------------------------------------------------
 
     def properties_dialog(self, dl: Download) -> None:
-        with PropertiesDialog(self._parent(), dl, self.engine.is_running(dl.id)) as dlg:
+        with PropertiesDialog(self._parent(), dl, self.engine.is_running(dl.id), self.settings.recent_folders) as dlg:
             if self._modal(dlg) != wx.ID_OK:
                 return
             values, new_url = dlg.values, dlg.new_url
@@ -966,6 +968,12 @@ def run(urls: list[str] | None = None, tray: bool = False, debug: bool = False) 
     logs.enable_crash_log()
     app = wx.App(False)
     app.SetAppName(APP_NAME)
+    if settings.dark_mode and hasattr(app, "MSWEnableDarkMode"):
+        try:
+            app.MSWEnableDarkMode()
+            log.info("dark mode on")
+        except Exception:  # noqa: BLE001 - only looks
+            log.warning("dark mode could not be turned on", exc_info=True)
     log.info("wxPython %s", wx.version())
     engine = Engine(Store(data_dir() / "downpour.db"), settings)
     ctl = Controller(app, settings, engine, debug=debug)

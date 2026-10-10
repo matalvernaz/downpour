@@ -146,7 +146,8 @@ class DownloadInfoDialog(wx.Dialog):
         cats = category_names(settings)
         cat = settings.category_for(self.name.GetValue(), dl.url)
         self.category = forms.choice(self, sizer, "&Category:", cats, cats.index(cat.name) if cat else 0)
-        self.folder = forms.folder_row(self, sizer, "Save &to:", dl.directory or str(settings.folder_for(self.name.GetValue(), dl.url)))
+        self.folder = forms.folder_row(self, sizer, "Save &to:", dl.directory or str(settings.folder_for(self.name.GetValue(), dl.url)),
+                                       settings.recent_folders)
         self.checksum = forms.text(self, sizer, "E&xpected checksum (optional):", dl.checksum)
         btns = forms.buttons(
             self, sizer,
@@ -286,7 +287,7 @@ class LinkPickerDialog(wx.Dialog):
             b.Bind(wx.EVT_BUTTON, handler)
             row.Add(b, 0, wx.RIGHT, 6)
         sizer.Add(row, 0, wx.ALL, 6)
-        self.folder = forms.folder_row(self, sizer, "Save &to (leave empty to sort into category folders):", "")
+        self.folder = forms.folder_row(self, sizer, "Save &to (leave empty to sort into category folders):", "", settings.recent_folders)
         btns = forms.buttons(
             self, sizer,
             [(wx.ID_OK, "&Start downloads"), (wx.ID_APPLY, "Download &later"), (wx.ID_CANCEL, "Cancel")],
@@ -351,7 +352,7 @@ class StreamPickerDialog(wx.Dialog):
     ``folder_path`` and ``use_ytdlp``.
     """
 
-    def __init__(self, parent: wx.Window | None, streams: list):
+    def __init__(self, parent: wx.Window | None, streams: list, recent: list[str] | None = None):
         super().__init__(parent, title="Grab video or audio", style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self.streams = streams
         self.chosen: list = []
@@ -380,7 +381,7 @@ class StreamPickerDialog(wx.Dialog):
             b.Bind(wx.EVT_BUTTON, lambda e, v=value: self._check_all(v))
             row.Add(b, 0, wx.RIGHT, 6)
         sizer.Add(row, 0, wx.ALL, 6)
-        self.folder = forms.folder_row(self, sizer, "Save &to (leave empty to sort into category folders):", "")
+        self.folder = forms.folder_row(self, sizer, "Save &to (leave empty to sort into category folders):", "", recent)
         btns = forms.buttons(
             self, sizer,
             [(wx.ID_OK, "&Start downloads"), (wx.ID_APPLY, "Download &later"),
@@ -471,13 +472,13 @@ def expand_batch(pattern: str, start: str, end: str, width: int = 0) -> list[str
 class PropertiesDialog(wx.Dialog):
     """Everything about one download, plus the settings that can change."""
 
-    def __init__(self, parent: wx.Window | None, dl: Download, running: bool):
+    def __init__(self, parent: wx.Window | None, dl: Download, running: bool, recent: list[str] | None = None):
         super().__init__(parent, title=f"Properties of {dl.display_name()}", style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self.dl = dl
         sizer = wx.BoxSizer(wx.VERTICAL)
         self.details = forms.readonly(self, sizer, "&Details:", details_text(dl, running), lines=12)
         self.filename = forms.text(self, sizer, "File &name:", dl.filename)
-        self.folder = forms.folder_row(self, sizer, "&Folder:", dl.directory)
+        self.folder = forms.folder_row(self, sizer, "&Folder:", dl.directory, recent)
         if running:
             for ctrl in (self.filename, self.folder):
                 ctrl.Disable()

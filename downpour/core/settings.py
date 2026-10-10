@@ -99,6 +99,10 @@ class Settings:
     clipboard_monitor: bool = True
     show_info_dialog: bool = True
 
+    # Folders chosen for recent downloads, newest first (the dialogs offer them).
+    recent_folders: list[str] = field(default_factory=list)
+    dark_mode: bool = False  # wxWidgets' dark mode for the window; off until it reads well
+
     # The list
     columns: list[str] = field(default_factory=lambda: ["Name", "Status", "Size", "Speed", "Time left", "Added"])
     sort_by: str = "queue"  # queue | name | status | size | added
@@ -252,7 +256,7 @@ def from_dict(raw: dict) -> Settings:
 # Settings whose values never go into a log file, and bookkeeping that is
 # not worth reporting as a change.
 _PRIVATE = frozenset({"proxy_url"})
-_BOOKKEEPING = frozenset({"last_update_check", "last_run_version"})
+_BOOKKEEPING = frozenset({"last_update_check", "last_run_version", "recent_folders"})
 
 
 def _loggable(key: str, value: object) -> str:
@@ -260,6 +264,19 @@ def _loggable(key: str, value: object) -> str:
         return "<set>" if value else "<empty>"
     text = repr(value)
     return text if len(text) <= 300 else text[:300] + f"... <{len(text)} characters>"
+
+
+RECENT_FOLDERS = 8
+
+
+def remember_folder(settings: Settings, folder: str) -> None:
+    """Put ``folder`` at the top of the recent folders, dropping repeats."""
+    folder = (folder or "").strip()
+    if not folder:
+        return
+    key = os.path.normcase(folder)
+    settings.recent_folders = [folder] + [f for f in settings.recent_folders if os.path.normcase(f) != key]
+    del settings.recent_folders[RECENT_FOLDERS:]
 
 
 def differences(old: Settings | dict, new: Settings | dict) -> list[str]:

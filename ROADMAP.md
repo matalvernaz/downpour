@@ -35,6 +35,15 @@ recommended by blind users. That gap is Downpour's reason to exist.
   after asking.
 - Grab offers the audio and video a page actually played, in a checklist,
   for players that stream from private addresses.
+- Version 0.1.2 (2026-10-10), from the research below: search, sort and
+  columns in the list; rename or move in Properties; keep awake; Recycle
+  Bin; server file dates; skip existing files; crawl recovery; a night
+  speed limit; custom sounds; a command after each download; Alt+Shift+K
+  lets the browser keep the next download; categories by site; and for
+  video and audio: audio-track language, subtitles and transcripts,
+  SponsorBlock, tags and chapters, clipping by time, and MP3, M4A, Opus,
+  FLAC and WAV presets. yt-dlp is pointed at Node or Bun before Deno,
+  which is being wound down.
 
 ## Next
 
@@ -47,34 +56,13 @@ developers).
 
 Small, and worth doing first:
 
-- A search box that narrows the download list (Ctrl+F).
-- Keep the computer awake while downloads run, so overnight queues finish.
-- Send deleted files to the Recycle Bin instead of deleting for good.
-- Rename or move a download in Properties, finished files included.
-- Sort the list and choose its columns (shorter rows to listen to).
 - Recent folders in the new-download dialogs.
 - Dark mode (wx.App.MSWEnableDarkMode is in wxPython 4.3).
-- Choose your own sound for each event.
-- "Skip if the file exists" as a duplicate choice, remembered.
-- React to a download that slows to a trickle: reconnect it, or move it
-  aside so the queue keeps going.
-- A keyboard way to let the browser keep the next download (IDM's
-  Alt+click), without turning capture off.
-- Run a program after each download, with the file's path filled in.
-- Speed limits by time of day.
-- Give finished files the server's date (Last-Modified is stored already).
-- Categories of your own, matched by file type or site.
 
 Video and audio, mostly yt-dlp options:
 
-- Choose the audio track: original language, a dub, or audio description.
-- Subtitles, subtitles only, a plain-text transcript, the description.
-- Cut sponsor segments (SponsorBlock); blind users call it a must.
 - Search YouTube and SoundCloud from Downpour (ytsearch, scsearch) into the
   existing checklist.
-- More audio formats and bitrates: M4A, Opus, FLAC, WAV, MP3 128-320.
-- Tags, cover art, chapters and track numbers.
-- Download part of a video by start and end time.
 - Follow a channel or playlist and fetch only what is new.
 
 Bigger:
@@ -95,8 +83,6 @@ Bigger:
 - Sites whose bot checks reject non-browser clients: "Download with the
   browser instead" exists; consider a browser-like TLS client for them.
 
-Watch: Deno is being wound down (yt-dlp issue 17799, October 2026), and
-Downpour tries Deno first for YouTube; prefer Node or Bun when yt-dlp does.
 
 ## Considered, not planned
 
