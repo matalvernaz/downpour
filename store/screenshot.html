@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Downpour store screenshot</title>
+<style>
+  /* 1280 x 800, drawn by tools/make_store_assets.py. The panel copies
+     extension/popup.html in the state a working setup shows. */
+  html, body { margin: 0; width: 1280px; height: 800px; overflow: hidden; }
+  body {
+    font-family: "Segoe UI", system-ui, sans-serif;
+    background: linear-gradient(135deg, #e8f0fe 0%, #f8fbff 60%, #ffffff 100%);
+    color: #202124;
+    display: flex; align-items: center; justify-content: center; gap: 72px;
+  }
+  .window {
+    width: 470px; background: #fff; border-radius: 10px;
+    box-shadow: 0 12px 40px rgba(25, 103, 210, 0.25), 0 2px 6px rgba(0, 0, 0, 0.12);
+    overflow: hidden;
+  }
+  .bar { background: #f1f3f4; padding: 12px 16px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #dadce0; }
+  .bar .address { flex: 1; background: #fff; border-radius: 16px; padding: 7px 14px; font-size: 15px; color: #5f6368; }
+  .bar img { width: 24px; height: 24px; }
+  .panel { padding: 18px 24px 24px; font-size: 19px; }
+  .panel h1 { font-size: 25px; margin: 0 0 10px; }
+  .panel p { margin: 10px 0; }
+  .field { margin: 12px 0; display: flex; align-items: center; gap: 10px; }
+  .box { width: 20px; height: 20px; border: 2px solid #1967d2; border-radius: 3px; display: inline-flex; align-items: center; justify-content: center; font-size: 15px; color: #fff; }
+  .box.on { background: #1967d2; }
+  .button { display: block; margin-top: 10px; padding: 9px 14px; border: 1px solid #c4c7c5; border-radius: 6px; background: #f8f9fa; text-align: center; }
+  .copy { width: 520px; }
+  .copy h2 { font-size: 44px; margin: 0 0 18px; color: #1967d2; }
+  .copy p { font-size: 23px; line-height: 1.45; margin: 0 0 14px; }
+  .copy li { font-size: 21px; line-height: 1.45; margin-bottom: 8px; }
+  .copy ul { padding-left: 26px; margin: 0; }
+  kbd { font-family: inherit; background: #fff; border: 1px solid #c4c7c5; border-radius: 4px; padding: 0 6px; }
+</style>
+</head>
+<body>
+  <div class="window" aria-label="The Downpour panel in Chrome">
+    <div class="bar">
+      <div class="address">example.com/downloads</div>
+      <img src="../extension/icons/icon-32.png" alt="">
+    </div>
+    <div class="panel">
+      <h1>Downpour</h1>
+      <p>Downpour is running, version 0.1.0</p>
+      <div class="field"><span class="box on">&#10003;</span> Capture downloads</div>
+      <div class="field"><span class="box on">&#10003;</span> Capture downloads on example.com</div>
+      <div class="field"><span class="box"></span> Also capture in private windows</div>
+      <span class="button">Grab video or audio from this page</span>
+      <span class="button">Open Downpour</span>
+      <span class="button">Copy the diagnostic log</span>
+    </div>
+  </div>
+  <div class="copy">
+    <h2>Downloads, handed to Downpour</h2>
+    <p>Connects Chrome to Downpour, the free download manager for Windows made for screen reader users.</p>
+    <ul>
+      <li>Downloads you start go to Downpour</li>
+      <li>Download a link, a selection or every link on a page</li>
+      <li>Grab video and audio from the page</li>
+      <li><kbd>Alt+Shift+L</kbd> downloads the focused link</li>
+    </ul>
+  </div>
+</body>
+</html>

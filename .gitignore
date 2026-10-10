@@ -10,3 +10,4 @@ dist/
 downpour/vendor/
 web-ext-artifacts/
 downpour/_buildinfo.py
+extension/.amo-upload-uuid
