@@ -7,6 +7,8 @@
     downpour get URL [options]    download in this console, no window
     downpour helper [install | remove | status]
                                   register this copy as the browsers' helper
+    downpour autostart on|off     start Downpour with Windows, or stop doing so
+    downpour quit                 close the running Downpour and wait for it
 
 Logs are in %LOCALAPPDATA%\\Downpour\\logs (see downpour/core/logs.py).
 
@@ -33,6 +35,10 @@ def main(argv: list[str]) -> int:
         return _get(argv[1:])
     if argv and argv[0] == "helper":
         return _helper(argv[1:])
+    if argv and argv[0] == "autostart":
+        return _autostart(argv[1:])
+    if argv and argv[0] == "quit":
+        return _quit(argv[1:])
     if argv and argv[0] in ("-V", "--version", "version"):
         print(f"{APP_NAME} {__version__}")
         return 0
@@ -98,6 +104,63 @@ def _helper(argv: list[str]) -> int:
     for name, state in report.items():
         print(f"{name}: {state}")
     return 0
+
+
+def _autostart(argv: list[str]) -> int:
+    """Options' "Start Downpour when Windows starts", for installers: the
+    setting and the Run key change together, so they cannot disagree."""
+    from downpour.core import logs, winutil
+    from downpour.core import settings as settings_mod
+
+    if len(argv) != 1 or argv[0] not in ("on", "off"):
+        print("Usage: downpour autostart on|off", file=sys.stderr)
+        return 2
+    logs.setup("cli.log", detailed=logs.detailed_setting())
+    settings = settings_mod.load()
+    settings.start_with_windows = argv[0] == "on"
+    settings_mod.save(settings)
+    try:
+        winutil.set_start_with_windows(settings.start_with_windows, winutil.autostart_command())
+    except OSError as e:
+        logging.getLogger("downpour.cli").exception("could not change the startup entry")
+        print(f"Could not change the startup entry: {e}", file=sys.stderr)
+        return 1
+    logging.getLogger("downpour.cli").info("start with Windows turned %s by the command line", argv[0])
+    print(f"Start with Windows: {argv[0]}")
+    return 0
+
+
+def _quit(argv: list[str]) -> int:
+    """Close the running Downpour the way Exit does (downloads are saved to
+    resume), then wait until its process has ended, so an installer can
+    replace its files."""
+    from downpour.core import ipc, logs, winutil
+
+    if argv:
+        print("Usage: downpour quit", file=sys.stderr)
+        return 2
+    logs.setup("cli.log", detailed=logs.detailed_setting())
+    log = logging.getLogger("downpour.cli")
+    try:
+        reply = ipc.request({"type": "quit"}, timeout=10)
+    except ipc.NotRunning:
+        print("Downpour is not running.")
+        return 0
+    except Exception as e:  # noqa: BLE001 - report any failure to the caller
+        log.warning("quit request failed: %r", e)
+        print(f"Could not ask Downpour to close: {e}", file=sys.stderr)
+        return 1
+    pid = reply.get("pid")
+    if not reply.get("ok") or not isinstance(pid, int):
+        print(f"Downpour did not agree to close: {reply.get('error', 'no reason given')}", file=sys.stderr)
+        return 1
+    if winutil.wait_for_exit(pid, 60):
+        log.info("Downpour (process %s) closed on request", pid)
+        print("Downpour has closed.")
+        return 0
+    log.warning("Downpour (process %s) was still running 60 seconds after the quit request", pid)
+    print("Downpour did not close within 60 seconds.", file=sys.stderr)
+    return 1
 
 
 def _get(argv: list[str]) -> int:

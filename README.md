@@ -6,6 +6,23 @@ known for, adds some IDM does not, and costs nothing.
 
 Status: early development, version 0.1. It works, and it is being tested.
 
+## Installing
+
+Download `DownpourSetup-<version>.exe` from the Releases page and run it.
+It installs for your account only, with no administrator prompt, into
+`%LOCALAPPDATA%\Programs\Downpour`, and offers:
+
+- starting Downpour with Windows, in the notification area;
+- the Chrome extension, from the Chrome Web Store: Chrome asks you to turn
+  it on the next time it starts;
+- the Mozilla-signed Firefox extension: Firefox asks you to confirm;
+- a desktop shortcut.
+
+The setup is not code-signed yet, so Windows SmartScreen may say it
+protected your PC; choose More info, then Run anyway. To remove Downpour,
+use Settings, Apps. The uninstaller asks whether to delete your settings,
+download list and logs, and never touches the files you downloaded.
+
 ## Why another download manager
 
 - Free and open source, with no licence nags, no ads and no telemetry.
@@ -108,7 +125,9 @@ The build lands in `dist\Downpour`. Nothing under `downpour\core` or
 `downpour\cli` uses third-party packages, and a CI check makes sure neither
 imports wx.
 
-To install or update the build for your account, run
+`python tools/make_installer.py` then turns that build into
+`dist\DownpourSetup-<version>.exe` (needs Inno Setup 6). To install or
+update the build for your account without the setup, run
 
     powershell -ExecutionPolicy Bypass -File tools\install.ps1
 

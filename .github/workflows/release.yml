@@ -27,7 +27,18 @@ jobs:
         run: |
           Compress-Archive -Path dist/Downpour -DestinationPath Downpour-windows.zip
           (Get-FileHash Downpour-windows.zip -Algorithm SHA256).Hash.ToLower() + "  Downpour-windows.zip" | Out-File -Encoding ascii Downpour-windows.zip.sha256
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+      - name: Setup program
+        shell: pwsh
+        run: |
+          python tools/make_installer.py
+          $setup = Get-Item dist/DownpourSetup-*.exe
+          (Get-FileHash $setup -Algorithm SHA256).Hash.ToLower() + "  " + $setup.Name | Out-File -Encoding ascii "$($setup.FullName).sha256"
       - name: Publish
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create ${{ github.ref_name }} Downpour-windows.zip Downpour-windows.zip.sha256 --title "Downpour ${{ github.ref_name }}" --generate-notes --prerelease
+        run: |
+          $setup = Get-Item dist/DownpourSetup-*.exe
+          gh release create ${{ github.ref_name }} $setup.FullName "$($setup.FullName).sha256" Downpour-windows.zip Downpour-windows.zip.sha256 --title "Downpour ${{ github.ref_name }}" --generate-notes --prerelease

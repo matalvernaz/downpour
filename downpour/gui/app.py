@@ -21,7 +21,7 @@ from downpour.core import settings as settings_mod
 from downpour.core.engine import Engine
 from downpour.core.logs import redact_url, summarize_cookies
 from downpour.core.models import Download, Status
-from downpour.core.paths import app_dir, data_dir, logs_dir
+from downpour.core.paths import data_dir, logs_dir
 from downpour.core.store import Store
 from downpour.core.units import format_size, format_speed, parse_size
 from downpour.gui import forms
@@ -141,6 +141,10 @@ class Controller:
             log.info("request show: bringing the window forward")
             wx.CallAfter(self.show_window)
             return {"ok": True}
+        if kind == "quit":
+            log.info("request quit: closing, as an installer or the command line asked")
+            wx.CallAfter(self.exit)
+            return {"ok": True, "pid": os.getpid()}
         if kind == "offer":
             item = msg.get("download")
             if not isinstance(item, dict) or not str(item.get("url", "")).lower().startswith(("http://", "https://")):
@@ -537,7 +541,7 @@ class Controller:
         settings_mod.save(self.settings)
         self.engine.apply_settings()
         try:
-            winutil.set_start_with_windows(self.settings.start_with_windows, autostart_command())
+            winutil.set_start_with_windows(self.settings.start_with_windows, winutil.autostart_command())
         except OSError as e:
             log.warning("could not update the startup entry: %s", e)
         self.frame.rebuild_filters()
@@ -758,17 +762,6 @@ class ClipboardWatcher:
         self._last_url = url
         log.info("clipboard: offering %s", redact_url(url))
         self.ctl.offer({"url": url})
-
-
-def autostart_command() -> str:
-    if getattr(sys, "frozen", False):
-        return f'"{sys.executable}" --tray'
-    exe = Path(sys.executable)
-    windowless = exe.with_name("pythonw.exe")
-    runner = windowless if windowless.exists() else exe
-    root = str(app_dir())
-    code = f"import sys; sys.path.insert(0, r'{root}'); from downpour.__main__ import main; sys.exit(main(['downpour', '--tray']))"
-    return f'"{runner}" -c "{code}"'
 
 
 def _setup_logging() -> Path:

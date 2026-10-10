@@ -197,6 +197,49 @@ def scan_with_defender(path: str) -> tuple[bool, str]:
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
+def autostart_command() -> str:
+    """What the Run key should start: the window app, in the notification area.
+
+    Built from the program folder rather than sys.executable, because the
+    command line (downpour-cli.exe) sets this too, and it must start the
+    window app beside it.
+    """
+    from downpour.core.paths import app_dir
+
+    if getattr(sys, "frozen", False):
+        return f'"{app_dir() / "Downpour.exe"}" --tray'
+    exe = sys.executable
+    windowless = os.path.join(os.path.dirname(exe), "pythonw.exe")
+    runner = windowless if os.path.exists(windowless) else exe
+    code = f"import sys; sys.path.insert(0, r'{app_dir()}'); from downpour.__main__ import main; sys.exit(main(['downpour', '--tray']))"
+    return f'"{runner}" -c "{code}"'
+
+
+def wait_for_exit(pid: int, timeout: float) -> bool:
+    """True once process ``pid`` has ended (or never existed); False if it
+    is still running after ``timeout`` seconds."""
+    if not WINDOWS:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                return True
+            time.sleep(0.2)
+        return False
+    kernel32 = ctypes.windll.kernel32
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    handle = kernel32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+    if not handle:
+        return True
+    try:
+        return kernel32.WaitForSingleObject(handle, int(timeout * 1000)) == 0  # WAIT_OBJECT_0
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def set_start_with_windows(enabled: bool, command: str) -> None:
     if not WINDOWS:
         return
