@@ -84,6 +84,27 @@ def guess_extension(mime: str) -> str:
     return ext
 
 
+MEDIA_EXTENSIONS = {
+    "audio/mpeg": ".mp3", "audio/mp3": ".mp3", "audio/mp4": ".m4a", "audio/x-m4a": ".m4a", "audio/m4a": ".m4a",
+    "audio/aac": ".aac", "audio/x-aac": ".aac", "audio/ogg": ".ogg", "audio/opus": ".opus", "audio/webm": ".webm",
+    "audio/flac": ".flac", "audio/x-flac": ".flac", "audio/wav": ".wav", "audio/x-wav": ".wav", "audio/wave": ".wav",
+    "video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov", "video/x-matroska": ".mkv",
+}
+_MEDIA_URL_EXTENSIONS = {
+    ".mp3", ".m4a", ".m4b", ".aac", ".oga", ".ogg", ".opus", ".flac", ".wav", ".weba", ".webm", ".mp4", ".m4v", ".mov", ".mkv",
+}
+
+
+def media_extension(url: str, mime: str) -> str:
+    """The extension for a media file a page played: the address's own when
+    it is a media one, else the type's. "" when neither tells."""
+    ext = os.path.splitext(urlsplit(url).path)[1].lower()
+    if ext in _MEDIA_URL_EXTENSIONS:
+        return ext
+    mime = (mime or "").split(";")[0].strip().lower()
+    return MEDIA_EXTENSIONS.get(mime) or guess_extension(mime)
+
+
 def choose(url: str, disposition: str | None, mime: str) -> str:
     """Pick the name for a download from everything the server told us."""
     name = from_content_disposition(disposition)

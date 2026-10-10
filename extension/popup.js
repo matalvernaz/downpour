@@ -76,7 +76,8 @@ async function checkSiteAccess() {
 
 async function refreshStatus() {
   try {
-    say((await ask({ cmd: "status" })).text);
+    const [tab] = await api.tabs.query({ active: true, currentWindow: true });
+    say((await ask({ cmd: "status", tabId: tab && tab.id })).text);
   } catch (error) {
     say(`Could not check Downpour: ${error.message}`);
   }

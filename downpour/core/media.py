@@ -29,6 +29,7 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
+from urllib.parse import urlsplit
 
 from downpour.core import filenames
 from downpour.core.logs import redact_arg, redact_url, summarize_cookies
@@ -445,6 +446,69 @@ def _parse_info(url: str, data: dict) -> MediaInfo:
             audio_only=audio_only, needs_ffmpeg=video_only,
         ))
     return info
+
+
+# -- streams the browser saw a page play -------------------------------------------
+
+
+@dataclass
+class FoundStream:
+    """Audio or video the browser extension saw a page play ("found" in a
+    media request, see docs/browser-protocol.md): a whole file that an audio
+    or video element loaded, or an HLS or DASH playlist. Web players often
+    stream from a private address that only exists once you are signed in,
+    so the page's own address means nothing to yt-dlp, but these do."""
+
+    url: str
+    kind: str = "file"  # file | hls | dash
+    mime: str = ""
+    size: int | None = None
+    cookies: list[dict] = field(default_factory=list)
+
+    @property
+    def is_playlist(self) -> bool:
+        return self.kind in ("hls", "dash")
+
+    def label(self) -> str:
+        from downpour.core.units import format_size
+
+        host = urlsplit(self.url).hostname or "an unknown server"
+        if self.is_playlist:
+            what = f"{self.kind.upper()} stream, played in pieces"
+        else:
+            major = self.mime.split("/")[0]
+            ext = filenames.media_extension(self.url, self.mime).lstrip(".").upper()
+            what = {"audio": "Audio", "video": "Video"}.get(major, "Audio or video") + (f", {ext}" if ext else "")
+        size = f", {format_size(self.size)}" if self.size else ""
+        return f"{what}{size}, from {host}"
+
+    def download(self, page_url: str, title: str, user_agent: str) -> Download:
+        """A plain download of the whole file, named after the page."""
+        ext = filenames.media_extension(self.url, self.mime)
+        name = filenames.sanitize(f"{title.strip() or 'media'}{ext}") if ext else ""
+        return Download(
+            url=self.url, filename=name, filename_fixed=bool(name), referrer=page_url, page_url=page_url,
+            description=title, size=self.size, mime=self.mime, cookies=self.cookies, user_agent=user_agent,
+        )
+
+
+def found_streams(raw: object) -> list[FoundStream]:
+    """The usable entries of a media request's "found" list, newest first."""
+    out = []
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "")
+        if not url.lower().startswith(("http://", "https://")):
+            continue
+        kind = str(item.get("kind") or "file")
+        size = item.get("size")
+        out.append(FoundStream(
+            url=url, kind=kind if kind in ("file", "hls", "dash") else "file", mime=str(item.get("mime") or ""),
+            size=size if isinstance(size, int) and size > 0 else None,
+            cookies=[c for c in item.get("cookies") or [] if isinstance(c, dict)],
+        ))
+    return out
 
 
 def suggested_name(info: MediaInfo, choice: Choice) -> str:

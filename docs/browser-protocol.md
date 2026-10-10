@@ -58,9 +58,14 @@ reply means the extension resumes the browser download.
 (every link on a page) the app shows a checklist so the user chooses which to
 take. Reply: `{"ok": true}`.
 
-`media` - grab the video or audio on a page with yt-dlp:
-`{"type": "media", "page": Item}` where the item's `url` is the page URL.
-Reply: `{"ok": true}`.
+`media` - grab the video or audio on a page:
+`{"type": "media", "page": Item, "found": [Stream, ...]}` where the item's
+`url` is the page URL. `found` (newest first, possibly empty) lists what the
+page actually played, which matters for players that stream from a private
+address: each Stream is `{"url", "kind", "mime", "size", "cookies"}`, with
+`kind` `file` (a whole file an audio or video element loaded), `hls` or
+`dash` (a playlist). Downpour offers those first and yt-dlp on the page as
+the last choice. Reply: `{"ok": true}`.
 
 `show` - bring the Downpour window to the front. Reply: `{"ok": true}`.
 

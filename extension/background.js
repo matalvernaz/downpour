@@ -393,6 +393,104 @@ api.webRequest.onBeforeRequest.addListener(rememberRequest, {
 });
 
 // ---------------------------------------------------------------------------
+// Media the page plays. Web players often stream from a private address the
+// page only gets once you are signed in, so the page's own address is no use
+// to yt-dlp. The extension notes every whole audio or video file an audio or
+// video element loads, and every HLS or DASH playlist, per tab, and Grab
+// offers them to Downpour. They are kept in storage.session, because this
+// script stops and restarts often, and forgotten when the tab loads a new
+// page. Segments that players fetch for Media Source Extensions are left
+// out: they are pieces, not files.
+
+const MEDIA_PREFIX = "media:";
+const MEDIA_PER_TAB = 20;
+const MEDIA_MIN_BYTES = 64 * 1024; // smaller files are interface sounds
+const PLAYLIST_TYPES = /^(application\/(vnd\.apple\.mpegurl|x-mpegurl|dash\+xml)|audio\/(x-)?mpegurl)$/;
+const PLAYLIST_PATH = /\.(m3u8|mpd)$/i;
+
+let mediaSaving = Promise.resolve(); // one read-modify-write of the lists at a time
+
+function responseHeader(details, name) {
+  const found = (details.responseHeaders || []).find((h) => h.name.toLowerCase() === name);
+  return found ? String(found.value || "") : "";
+}
+
+// What a response is, or null when it is not media worth offering.
+function mediaKind(details) {
+  const mime = responseHeader(details, "content-type").split(";")[0].trim().toLowerCase();
+  let path = "";
+  try {
+    path = new URL(details.url).pathname;
+  } catch {
+    return null;
+  }
+  if (PLAYLIST_TYPES.test(mime) || PLAYLIST_PATH.test(path)) {
+    return { kind: mime.includes("dash") || /\.mpd$/i.test(path) ? "dash" : "hls", mime };
+  }
+  if (details.type !== "media") return null; // a media element's own request is the whole file
+  // Whatever an audio or video element loads is media, however the server
+  // labels it ("application/octet-stream" is common); error pages are not.
+  if (/^(text\/|application\/(json|xml|problem))/.test(mime)) return null;
+  return { kind: "file", mime };
+}
+
+// The whole file's size: from Content-Range on a 206, else Content-Length.
+function mediaSize(details) {
+  const range = responseHeader(details, "content-range").match(/\/(\d+)\s*$/);
+  if (range) return Number(range[1]);
+  const length = Number(responseHeader(details, "content-length"));
+  return details.statusCode === 200 && length > 0 ? length : -1;
+}
+
+function noteMedia(details) {
+  if (details.tabId < 0 || (details.statusCode !== 200 && details.statusCode !== 206)) return;
+  const found = mediaKind(details);
+  if (!found) return;
+  const size = mediaSize(details);
+  if (found.kind === "file" && size >= 0 && size < MEDIA_MIN_BYTES) return;
+  const key = MEDIA_PREFIX + details.tabId;
+  mediaSaving = mediaSaving
+    .then(async () => {
+      const list = (await api.storage.session.get(key))[key] || [];
+      if (list.some((m) => m.url === details.url)) return;
+      list.unshift(compact({ url: details.url, kind: found.kind, mime: found.mime, size: size >= 0 ? size : undefined }));
+      await api.storage.session.set({ [key]: list.slice(0, MEDIA_PER_TAB) });
+      const what = found.kind === "file" ? found.mime || "media file" : `${found.kind.toUpperCase()} playlist`;
+      diag.info(`tab ${details.tabId} played ${what} ${redactUrl(details.url)}${size >= 0 ? `, ${size} bytes` : ""}`);
+    })
+    .catch(() => {});
+}
+
+function forgetMedia(tabId) {
+  const key = MEDIA_PREFIX + tabId;
+  mediaSaving = mediaSaving.then(() => api.storage.session.remove(key)).catch(() => {});
+}
+
+async function mediaFor(tabId) {
+  if (typeof tabId !== "number" || tabId < 0) return [];
+  await mediaSaving;
+  const key = MEDIA_PREFIX + tabId;
+  return (await api.storage.session.get(key))[key] || [];
+}
+
+// Audio and video elements' requests from anywhere; scripts' requests only
+// when the address names a playlist, so that the hundreds of other requests
+// a page makes never wake this script.
+api.webRequest.onHeadersReceived.addListener(noteMedia, { urls: ["<all_urls>"], types: ["media"] }, ["responseHeaders"]);
+api.webRequest.onHeadersReceived.addListener(
+  noteMedia,
+  { urls: ["*://*/*.m3u8*", "*://*/*.mpd*"], types: ["xmlhttprequest", "other"] },
+  ["responseHeaders"]
+);
+api.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    if (details.tabId >= 0) forgetMedia(details.tabId);
+  },
+  { urls: ["<all_urls>"], types: ["main_frame"] }
+);
+api.tabs.onRemoved.addListener((tabId) => forgetMedia(tabId));
+
+// ---------------------------------------------------------------------------
 // Cookies
 
 async function cookieStoreFor({ incognito, cookieStoreId }) {
@@ -610,16 +708,26 @@ async function offer(item) {
 }
 
 // Downpour took the download: cancel the browser's copy and drop it from the
-// download list. False if the browser's copy is somehow still alive.
+// download list. False if the browser's copy is somehow still alive. A
+// download the browser is still setting up can take a moment to accept the
+// cancel, so it is checked and cancelled again a few times.
 async function takeOver(id) {
-  try {
-    await api.downloads.cancel(id);
-  } catch {
-    // finished or gone meanwhile; the search below tells which
+  let item;
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    try {
+      await api.downloads.cancel(id);
+    } catch (error) {
+      diag.debug(`download ${id}: cancel attempt ${attempt} failed: ${errorText(error)}`);
+    }
+    item = await findDownload(id);
+    if (!item || !(item.paused || item.state === "in_progress")) break;
+    await sleep(250 * attempt);
   }
-  const item = await findDownload(id);
   if (item && (item.paused || item.state === "in_progress")) {
-    diag.warn(`download ${id}: the browser's copy is still alive after cancelling, so it keeps it`);
+    diag.warn(
+      `download ${id}: the browser's copy is still alive after cancelling, so it keeps it ` +
+        `(state ${item.state}, paused ${item.paused}, can resume ${item.canResume}, error ${item.error || "none"})`
+    );
     return false;
   }
   if (item && item.state === "interrupted") await api.downloads.erase({ id }).catch(() => {});
@@ -838,16 +946,22 @@ async function sendLinks(links, page, pick) {
 async function grabMedia(page) {
   if (!isWebUrl(page.url)) throw new Problem("Downpour can only grab video or audio from web pages.");
   const context = { incognito: page.incognito, cookieStoreId: page.cookieStoreId };
+  const cache = new Map();
   const item = compact({
     url: page.url,
     pageUrl: page.url,
     pageTitle: page.title,
-    cookies: await cookiesFor([page.url], context),
+    cookies: await cookiesFor([page.url], context, cache),
     userAgent: navigator.userAgent,
     incognito: page.incognito,
   });
-  diag.info(`asking Downpour to grab video or audio from ${redactUrl(page.url)}`);
-  await request({ type: "media", page: item });
+  // What the page actually played comes first: often the only way in.
+  const found = [];
+  for (const media of await mediaFor(page.tabId)) {
+    found.push(compact({ ...media, cookies: await cookiesFor([media.url], context, cache) }));
+  }
+  diag.info(`asking Downpour to grab video or audio from ${redactUrl(page.url)}, with ${found.length} streams the page played`);
+  await request({ type: "media", page: item, found });
 }
 
 async function sendMedia(info, page) {
@@ -944,9 +1058,15 @@ api.commands.onCommand.addListener((command, tab) => {
 async function popupCommand(message) {
   diag.debug(`panel command: ${message.cmd}`);
   switch (message.cmd) {
-    case "status":
+    case "status": {
       await setProblem(""); // the popup now says what is wrong, so clear the badge
-      return helloStatus();
+      const status = await helloStatus();
+      const count = (await mediaFor(message.tabId)).length;
+      if (count) {
+        status.text += `. This page played ${count} audio or video ${count === 1 ? "stream" : "streams"}: Grab video or audio offers ${count === 1 ? "it" : "them"}`;
+      }
+      return status;
+    }
     case "grab": {
       const tab = await api.tabs.get(message.tabId);
       await grabMedia(pageContext({}, tab));

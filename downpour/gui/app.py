@@ -174,9 +174,13 @@ class Controller:
                 log.warning("request media without a usable page address; refused")
                 return {"ok": False, "error": "media needs a page with an http or https url"}
             cookies = [c for c in page.get("cookies") or [] if isinstance(c, dict)]
-            log.info("request media: grab from %s with %s", redact_url(str(page["url"])), summarize_cookies(cookies))
+            found = media.found_streams(msg.get("found"))
+            log.info("request media: grab from %s with %s; the page played %d streams", redact_url(str(page["url"])),
+                     summarize_cookies(cookies), len(found))
+            for stream in found:
+                log.info("  played: %s, %s", stream.label(), redact_url(stream.url))
             wx.CallAfter(self.grab_media, str(page["url"]), cookies, str(page.get("userAgent") or ""),
-                         str(page.get("referrer") or ""))
+                         str(page.get("referrer") or ""), found, str(page.get("pageTitle") or ""))
             return {"ok": True}
         log.warning("unknown request type %r", kind)
         return {"ok": False, "error": f"unknown request type {kind!r}"}
@@ -429,7 +433,7 @@ class Controller:
     # -- video and audio ----------------------------------------------------------
 
     def grab_media(self, url: str | None = None, cookies: list[dict] | None = None,
-                   user_agent: str = "", referrer: str = "") -> None:
+                   user_agent: str = "", referrer: str = "", found: list | None = None, title: str = "") -> None:
         def show():
             page = url
             if page is None:
@@ -437,41 +441,76 @@ class Controller:
                     if self._modal(dlg) != wx.ID_OK:
                         return
                     page = dlg.urls[0]
-            if not self.ensure_ytdlp():
-                return
-            with MediaDialog(self._parent(), self.settings, page, cookies, user_agent, referrer) as dlg:
-                if self._modal(dlg) != wx.ID_OK:
+            if found:
+                stream = self._choose_stream(found)
+                if stream is None:
+                    return  # cancelled
+                if stream != "page":
+                    self._grab_stream(stream, page, title, user_agent)
                     return
-                chosen, filename, directory = dlg.chosen, dlg.filename, dlg.directory
-                start, playlist, info = dlg.start_now, dlg.playlist, dlg.info
-            if chosen.needs_ffmpeg and not media.find_ffmpeg(self.settings):
-                self.ensure_ffmpeg(optional=True)
-            if playlist and info is not None:
-                if chosen.key.startswith("id:"):
-                    chosen = media.PRESETS[0]  # format ids differ from item to item
-                items = [(u, media.suggested_name(media.MediaInfo(url=u, title=t, ext=info.ext), chosen), t)
-                         for u, t in info.entries]
-            else:
-                items = [(page, filename, info.title if info else "")]
-            added = 0
-            for item_url, name, title in items:
-                dl = Download(
-                    url=item_url, kind="media", media_format=media_format_value(chosen),
-                    filename=name, filename_fixed=True, directory=directory, description=title,
-                    cookies=cookies or [], user_agent=user_agent, referrer=referrer,
-                )
-                try:
-                    self.engine.add(dl, start=start, force=start and not playlist)
-                except ValueError:
-                    continue  # a playlist entry without a web address
-                added += 1
-            if added:
-                self.feedback.play("added")
-            if len(items) > 1:
-                skipped = len(items) - added
-                self.feedback.say(f"{added} items added" + (f", {skipped} skipped without a web address" if skipped else ""))
+            self._grab_with_ytdlp(page, cookies, user_agent, referrer)
 
         self._queue_dialog(show)
+
+    def _choose_stream(self, found: list):
+        """Which of the streams the page played to download, "page" for
+        yt-dlp on the page itself, or None when cancelled."""
+        choices = [stream.label() for stream in found] + ["None of these: look for video and audio on the page with yt-dlp"]
+        noun = "stream" if len(found) == 1 else "streams"
+        with wx.SingleChoiceDialog(self._parent(), f"The page played {len(found)} audio or video {noun}, newest first. Download:",
+                                   "Grab video or audio", choices) as dlg:
+            dlg.SetSelection(0)
+            if self._modal(dlg) != wx.ID_OK:
+                log.info("grab cancelled at the choice of streams")
+                return None
+            index = dlg.GetSelection()
+        if index >= len(found):
+            log.info("grab: the user chose yt-dlp on the page")
+            return "page"
+        log.info("grab: the user chose %s", found[index].label())
+        return found[index]
+
+    def _grab_stream(self, stream, page: str, title: str, user_agent: str) -> None:
+        if stream.is_playlist:
+            # yt-dlp reads HLS and DASH playlists itself, given the page as referrer.
+            self._grab_with_ytdlp(stream.url, stream.cookies, user_agent, page)
+            return
+        self._confirm_download(stream.download(page, title, user_agent), interactive=True)
+
+    def _grab_with_ytdlp(self, page: str, cookies: list[dict] | None, user_agent: str, referrer: str) -> None:
+        if not self.ensure_ytdlp():
+            return
+        with MediaDialog(self._parent(), self.settings, page, cookies, user_agent, referrer) as dlg:
+            if self._modal(dlg) != wx.ID_OK:
+                return
+            chosen, filename, directory = dlg.chosen, dlg.filename, dlg.directory
+            start, playlist, info = dlg.start_now, dlg.playlist, dlg.info
+        if chosen.needs_ffmpeg and not media.find_ffmpeg(self.settings):
+            self.ensure_ffmpeg(optional=True)
+        if playlist and info is not None:
+            if chosen.key.startswith("id:"):
+                chosen = media.PRESETS[0]  # format ids differ from item to item
+            items = [(u, media.suggested_name(media.MediaInfo(url=u, title=t, ext=info.ext), chosen), t)
+                     for u, t in info.entries]
+        else:
+            items = [(page, filename, info.title if info else "")]
+        added = 0
+        for item_url, name, title in items:
+            dl = Download(
+                url=item_url, kind="media", media_format=media_format_value(chosen),
+                filename=name, filename_fixed=True, directory=directory, description=title,
+                cookies=cookies or [], user_agent=user_agent, referrer=referrer,
+            )
+            try:
+                self.engine.add(dl, start=start, force=start and not playlist)
+            except ValueError:
+                continue  # a playlist entry without a web address
+            added += 1
+        if added:
+            self.feedback.play("added")
+        if len(items) > 1:
+            skipped = len(items) - added
+            self.feedback.say(f"{added} items added" + (f", {skipped} skipped without a web address" if skipped else ""))
 
     def ensure_ytdlp(self) -> bool:
         if media.find_ytdlp(self.settings):
