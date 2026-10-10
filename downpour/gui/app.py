@@ -123,6 +123,7 @@ class Controller:
 
     def _tick(self, evt) -> None:
         running, queued, speed = self.engine.totals()
+        winutil.keep_awake(bool(running) and self.settings.keep_awake)
         if running:
             tip = f"Downpour: {running} downloading at {format_speed(speed) or '0 bytes/s'}"
         elif queued:
@@ -833,6 +834,7 @@ class Controller:
             return
         log.info("exiting%s", " and then running the when-done action" if then else "")
         self._exiting = True
+        winutil.keep_awake(False)
         self._after_exit = then
         self.timer.Stop()
         self.clipboard.stop()

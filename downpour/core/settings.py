@@ -59,8 +59,11 @@ class Settings:
     download_dir: str = field(default_factory=lambda: str(downloads_dir()))
     use_category_folders: bool = True
     categories: list[Category] = field(default_factory=default_categories)
-    duplicate_action: str = "rename"  # rename | overwrite | ask
+    duplicate_action: str = "rename"  # rename | overwrite | skip | ask
     mark_of_the_web: bool = True
+    keep_server_date: bool = True  # finished files get the server's Last-Modified date
+    recycle_bin: bool = True  # deleting a finished file sends it to the Recycle Bin
+    keep_awake: bool = True  # stop Windows sleeping while downloads run
 
     # Connections
     max_connections: int = 8

@@ -427,3 +427,27 @@ def test_bot_check_refusal_is_explained(server, make_engine):
     finally:
         helpers._Handler._plain = original
     assert "bot protection" in dl.error and "browser instead" in dl.error
+
+
+def test_skip_setting_leaves_existing_file_alone(server, make_engine):
+    data = payload(5_000)
+    url = server.add("/skip.txt", data)
+    engine = make_engine(duplicate_action="skip")
+    first = wait_for(engine, add(engine, url).id, Status.COMPLETED)
+    server.files["/skip.txt"].data = b"new contents"
+    second = wait_for(engine, add(engine, url).id, Status.FAILED)
+    assert "already exists" in second.error
+    assert read(first.path) == data
+    assert not os.path.exists(first.path + ".part")
+
+
+def test_finished_file_gets_the_server_date(server, make_engine):
+    url = server.add("/dated.bin", payload(5_000))
+    engine = make_engine()
+    dl = wait_for(engine, add(engine, url).id, Status.COMPLETED)
+    if not dl.last_modified:
+        pytest.skip("the test server sends no Last-Modified header")
+    import email.utils
+
+    expected = email.utils.parsedate_to_datetime(dl.last_modified).timestamp()
+    assert abs(os.path.getmtime(dl.path) - expected) < 2

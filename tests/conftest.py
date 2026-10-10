@@ -44,6 +44,7 @@ def make_engine(tmp_path):
             min_split_size=64 * 1024,
             timeout=5.0,
             max_retries=5,
+            recycle_bin=False,  # tests must not fill the real Recycle Bin
         )
         for key, value in overrides.items():
             setattr(settings, key, value)

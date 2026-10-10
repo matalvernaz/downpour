@@ -141,6 +141,78 @@ def parent_process() -> str:
     return f"process {parent}"
 
 
+ES_CONTINUOUS = 0x80000000
+ES_SYSTEM_REQUIRED = 0x00000001
+_awake = False
+
+
+def keep_awake(on: bool) -> None:
+    """Stop Windows sleeping while downloads run (the display may still
+    turn off). The flag belongs to the calling thread, so the same thread
+    must set and clear it; the window's timer does both."""
+    global _awake
+    if not WINDOWS or on == _awake:
+        return
+    flags = ES_CONTINUOUS | (ES_SYSTEM_REQUIRED if on else 0)
+    if ctypes.windll.kernel32.SetThreadExecutionState(flags):
+        _awake = on
+        log.info("keeping the computer awake" if on else "the computer may sleep again")
+
+
+FO_DELETE = 3
+FOF_SILENT = 0x0004
+FOF_NOCONFIRMATION = 0x0010
+FOF_ALLOWUNDO = 0x0040
+FOF_NOERRORUI = 0x0400
+
+
+def recycle(path: str) -> bool:
+    """Send a file to the Recycle Bin. False when Windows refused (a
+    network or removable drive, or a file that is in use)."""
+    if not WINDOWS or not os.path.exists(path):
+        return False
+    from ctypes import wintypes
+
+    class SHFILEOPSTRUCTW(ctypes.Structure):
+        _fields_ = [
+            ("hwnd", wintypes.HWND), ("wFunc", wintypes.UINT), ("pFrom", wintypes.LPCWSTR), ("pTo", wintypes.LPCWSTR),
+            ("fFlags", ctypes.c_ushort), ("fAnyOperationsAborted", wintypes.BOOL), ("hNameMappings", ctypes.c_void_p),
+            ("lpszProgressTitle", wintypes.LPCWSTR),
+        ]
+
+    op = SHFILEOPSTRUCTW()
+    op.wFunc = FO_DELETE
+    op.pFrom = os.path.abspath(path) + "\0"  # double NUL ends the list
+    op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI
+    shell32 = ctypes.windll.shell32
+    shell32.SHFileOperationW.argtypes = [ctypes.POINTER(SHFILEOPSTRUCTW)]
+    result = shell32.SHFileOperationW(ctypes.byref(op))
+    if result != 0 or op.fAnyOperationsAborted:
+        log.info("the Recycle Bin refused %s (code %s)", path, result)
+        return False
+    return True
+
+
+def set_file_time(path: str, last_modified: str) -> bool:
+    """Give a file the date the server gave it (an HTTP Last-Modified
+    header). False when the header could not be read."""
+    import email.utils
+
+    try:
+        when = email.utils.parsedate_to_datetime(last_modified)
+    except (TypeError, ValueError, IndexError):
+        return False
+    if when is None:
+        return False
+    try:
+        stamp = when.timestamp()
+        os.utime(path, (stamp, stamp))
+    except (OSError, OverflowError, ValueError):
+        log.debug("could not set the date of %s", path, exc_info=True)
+        return False
+    return True
+
+
 def open_path(path: str) -> None:
     log.debug("opening %s", path)
     if WINDOWS:

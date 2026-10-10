@@ -33,6 +33,7 @@ class FileSpec:
     redirect_to: str | None = None
     empty_ranges: bool = False  # answer ranged requests after the first with no bytes
     etag: str | None = None  # sent as ETag; an If-Range that differs gets the whole file
+    last_modified: str | None = "Sat, 03 Oct 2026 07:09:38 GMT"  # sent as Last-Modified
 
 
 @dataclass
@@ -126,6 +127,8 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Accept-Ranges", "bytes")
         if spec.etag:
             self.send_header("ETag", spec.etag)
+        if spec.last_modified:
+            self.send_header("Last-Modified", spec.last_modified)
         if status == 206:
             self.send_header("Content-Range", f"bytes {start}-{end - 1}/{len(data)}")
         if spec.disposition:

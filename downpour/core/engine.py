@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 from urllib.parse import urlsplit
 
-from downpour.core import filenames
+from downpour.core import filenames, winutil
 from downpour.core.limiter import RateLimiter
 from downpour.core.logs import redact_url
 from downpour.core.models import ACTIVE, Download, Status
@@ -259,7 +259,7 @@ class Engine:
         if dl.part_path:
             _unlink(dl.part_path)
         if delete_files and dl.status == Status.COMPLETED and dl.path:
-            _unlink(dl.path)
+            self._delete_finished(dl.path)
         self._emit("removed", dl)
         self._schedule()
 
@@ -278,11 +278,19 @@ class Engine:
                 return
         self._reset(dl)
 
+    def _delete_finished(self, path: str) -> None:
+        """A finished file the user asked to delete: the Recycle Bin when
+        the settings say so and Windows allows it, else gone for good."""
+        if self.settings.recycle_bin and winutil.recycle(path):
+            log.info("sent %s to the Recycle Bin", path)
+            return
+        _unlink(path)
+
     def _reset(self, dl: Download, start: bool = True) -> None:
         if dl.part_path:
             _unlink(dl.part_path)
         if dl.status == Status.COMPLETED and dl.path:
-            _unlink(dl.path)
+            self._delete_finished(dl.path)
         with self._lock:
             dl.segments = []
             dl.downloaded = 0

@@ -17,7 +17,11 @@ from downpour.gui import forms
 from downpour.gui.a11y import set_accessible_name
 
 PROXY_MODES = [("system", "Use the Windows proxy settings"), ("none", "Connect directly, without a proxy"), ("manual", "Use this proxy")]
-DUPLICATES = [("rename", "Add a number to the new file's name"), ("overwrite", "Replace the existing file")]
+DUPLICATES = [
+    ("rename", "Add a number to the new file's name"),
+    ("overwrite", "Replace the existing file"),
+    ("skip", "Skip the download"),
+]
 WHEN_DONE = [("nothing", "Do nothing"), ("exit", "Close Downpour"), ("sleep", "Sleep"), ("hibernate", "Hibernate"), ("shutdown", "Shut down")]
 DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 TIME_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
@@ -76,6 +80,9 @@ class OptionsDialog(wx.Dialog):
         self.notify_complete = forms.check(p, sz, "Show Windows &notifications when nothing was spoken", s.notify_complete)
         self.scan_after_download = forms.check(p, sz, "Scan finished downloads with Microsoft &Defender", s.scan_after_download)
         self.mark_of_the_web = forms.check(p, sz, "&Mark downloaded files as coming from the internet (recommended)", s.mark_of_the_web)
+        self.keep_server_date = forms.check(p, sz, "Give finished files the &date the server reports", s.keep_server_date)
+        self.recycle_bin = forms.check(p, sz, "Send deleted files to the &Recycle Bin", s.recycle_bin)
+        self.keep_awake = forms.check(p, sz, "Keep the computer a&wake while downloads run", s.keep_awake)
         self.check_for_updates = forms.check(p, sz, "Check for &updates automatically", s.check_for_updates)
         self.detailed_logging = forms.check(p, sz, "Write detailed &logs for troubleshooting", s.detailed_logging)
         logs_button = wx.Button(p, label="Open the log &folder")
@@ -325,6 +332,7 @@ class OptionsDialog(wx.Dialog):
             "show_complete_dialog", "speak_events", "sound_complete", "notify_complete",
             "scan_after_download", "mark_of_the_web", "speed_limit_enabled", "use_category_folders",
             "browser_capture", "schedule_enabled", "detailed_logging", "check_for_updates",
+            "keep_server_date", "recycle_bin", "keep_awake",
         ):
             setattr(s, name, getattr(self, name).GetValue())
         s.max_connections = self.max_connections.GetValue()

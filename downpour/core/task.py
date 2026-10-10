@@ -289,7 +289,11 @@ class HttpTask:
             dl.filename = net.pick_name(info, dl.url)
         folder = Path(dl.directory) if dl.directory else settings.folder_for(dl.filename)
         folder.mkdir(parents=True, exist_ok=True)
-        final = self.engine.claim_path(dl, folder / dl.filename)
+        wanted = folder / dl.filename
+        if settings.duplicate_action == "skip" and wanted.exists() and (dl.path or "").lower() != str(wanted).lower():
+            self._discard(resp)
+            raise DownloadError(f"Skipped: {wanted} already exists. Change the duplicate setting in Options to download it anyway.")
+        final = self.engine.claim_path(dl, wanted)
         dl.directory, dl.filename = str(final.parent), final.name
         if size:
             free = shutil.disk_usage(folder).free
@@ -773,3 +777,7 @@ class HttpTask:
                 except OSError:
                     raise DownloadError(f"{message}. Delete it without opening it: {final}") from None
                 raise DownloadError(f"{message}, so Downpour deleted it")
+        # Last: writing the Mark of the Web and scanning both touch the file's time.
+        if settings.keep_server_date and dl.last_modified:
+            if winutil.set_file_time(str(final), dl.last_modified):
+                log.debug("download %s: file dated %s, as the server said", dl.id, dl.last_modified)

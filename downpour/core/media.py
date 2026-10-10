@@ -307,10 +307,9 @@ def _common_args(dl_or_none, settings: "Settings", cookie_path: str | None, user
 
 
 def js_runtime_args() -> list[str]:
-    """YouTube needs a JavaScript runtime. yt-dlp enables Deno by itself;
-    when only Node or Bun is installed, enable that instead."""
-    if shutil.which("deno"):
-        return []
+    """YouTube needs a JavaScript runtime. Node or Bun is named when
+    installed; otherwise yt-dlp falls back to Deno by itself. Deno is being
+    wound down (announced October 2026), so it is the last resort."""
     for name in ("node", "bun"):
         path = shutil.which(name)
         if path:
@@ -617,7 +616,8 @@ class MediaTask:
         stem = Path(dl.filename).stem.replace("%", "%%") if dl.filename else "%(title).180B"
         template = os.path.join(dl.directory.replace("%", "%%"), f"{stem}.%(ext)s")
         cmd = [
-            ytdlp, "--newline", "--progress", "--no-playlist", "--windows-filenames", "--no-mtime",
+            ytdlp, "--newline", "--progress", "--no-playlist", "--windows-filenames",
+            "--mtime" if s.keep_server_date else "--no-mtime",
             "--progress-template", "download:DPPROG %(progress)j",
             # --print makes yt-dlp quiet, which hides its "[Merger]" lines; this is printed anyway.
             "--progress-template", "postprocess:DPPOST %(progress.status)s %(progress.postprocessor)s",
