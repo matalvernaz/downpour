@@ -53,6 +53,8 @@ Ctrl+C: copy the address
 Ctrl+K: checksums of the finished file
 Alt+Enter: properties
 Ctrl+1 to Ctrl+6: show all, running, queued, unfinished, finished or failed downloads
+Ctrl+F: search the list; Escape clears it and returns to the list
+View menu: sort the list and choose its columns
 Alt+W: the Show list; Alt+L: the download list
 Ctrl+Shift+O: options
 Ctrl+Q: exit Downpour completely

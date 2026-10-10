@@ -110,6 +110,7 @@ class HttpTask:
         self._received = 0
         self._started = 0.0
         self._slow_since: float | None = None  # when the speed first dropped below the stall threshold
+        self._reconnecting = False  # connections were cut on purpose; their errors are not failures
         self._peak_connections = 0
         self._samples: collections.deque[tuple[float, int]] = collections.deque()
         self.checkpointed: list | None = None  # last segment snapshot known to be on disk
@@ -356,6 +357,8 @@ class HttpTask:
             self._measure(now)
             if complete and busy == 0:
                 return
+            if busy == 0:
+                self._reconnecting = False
             self._watch_for_stall(now, busy)
             if failures > self.engine.settings.max_retries:
                 for extra in new:
@@ -450,7 +453,7 @@ class HttpTask:
             except net.NETWORK_ERRORS as e:
                 if _is_certificate_error(e):
                     raise DownloadError(net.describe(e)) from e
-                if not self._stop.is_set():
+                if not self._stop.is_set() and not self._reconnecting:
                     self._note_failure(e)
                 self._release(seg)
                 return None
@@ -503,7 +506,7 @@ class HttpTask:
             try:
                 data = resp.read1(want)
             except net.NETWORK_ERRORS as e:
-                if not self._stop.is_set():
+                if not self._stop.is_set() and not self._reconnecting:
                     self._note_failure(e)
                 return BROKEN
             if not data:
@@ -558,7 +561,9 @@ class HttpTask:
                 self.dl.id, format_speed(self.dl.speed), settings.stall_seconds,
             )
             self._slow_since = None
-            self._note_failure(TimeoutError("the download slowed to a crawl"))
+            with self._lock:
+                self._reconnecting = True
+                self._next_spawn = now + 1.0
             self._abort_all()
 
     # -- failure bookkeeping ----------------------------------------------------

@@ -185,14 +185,14 @@ class OptionsDialog(wx.Dialog):
             self.cat_list.SetItem(i, 2, cat.folder or "(automatic)")
         evt.Skip()
 
-    def _ask_name(self, title: str, current: str = "") -> str:
+    def _ask_name(self, title: str, current: str = "", exclude=None) -> str:
         with wx.TextEntryDialog(self, "Category name:", title, current) as dlg:
             if dlg.ShowModal() != wx.ID_OK:
                 return ""
             name = dlg.GetValue().strip()
         if not name:
             return ""
-        if any(c.name.lower() == name.lower() and c is not self._current_cat() for c in self.s.categories):
+        if any(c.name.lower() == name.lower() and c is not exclude for c in self.s.categories):
             forms.message(self, f"There is already a category called {name}.", icon=wx.ICON_WARNING)
             return ""
         return name
@@ -216,7 +216,7 @@ class OptionsDialog(wx.Dialog):
         cat = self._current_cat()
         if cat is None:
             return
-        name = self._ask_name("Rename category", cat.name)
+        name = self._ask_name("Rename category", cat.name, exclude=cat)
         if name:
             cat.name = name
             self.cat_list.SetItem(self._cat_index, 0, name)

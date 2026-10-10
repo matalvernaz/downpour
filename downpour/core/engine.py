@@ -344,6 +344,13 @@ class Engine:
                 raise ValueError("The download has no name yet")
             if new_name == dl.filename and os.path.normcase(new_dir) == os.path.normcase(dl.directory):
                 return dl
+            if not new_dir:
+                # Not started yet, so there is no file: the name alone changes.
+                dl.filename, dl.filename_fixed = new_name, True
+                self.save(dl)
+                log.info("download %s: renamed to %s before starting", dl.id, new_name)
+                self._emit("changed", dl)
+                return dl
             os.makedirs(new_dir, exist_ok=True)
             old_path, old_part = dl.path, dl.part_path
             target = self.claim_path(dl, Path(new_dir) / new_name)

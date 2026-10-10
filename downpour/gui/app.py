@@ -106,6 +106,7 @@ class Controller:
     def _on_engine_event(self, event: str, dl: Download | None) -> None:
         if event == "added" and dl is not None and dl.directory:
             settings_mod.remember_folder(self.settings, dl.directory)
+            settings_mod.save(self.settings)
         if event in ("completed", "failed", "idle", "added", "removed"):
             wx.CallAfter(self._handle_event, event, dl)
 
@@ -154,7 +155,7 @@ class Controller:
             # The extension's "let the browser keep the next download" key.
             self._pass_next = time.time() + 600
             log.info("request pass: the next browser download stays in the browser")
-            self.feedback.say("The next download stays in the browser")
+            wx.CallAfter(self.feedback.say, "The next download stays in the browser")
             return {"ok": True}
         if kind == "quit":
             log.info("request quit: closing, as an installer or the command line asked")
@@ -858,6 +859,7 @@ class Controller:
         log.info("exiting%s", " and then running the when-done action" if then else "")
         self._exiting = True
         winutil.keep_awake(False)
+        settings_mod.save(self.settings)
         self._after_exit = then
         self.timer.Stop()
         self.clipboard.stop()

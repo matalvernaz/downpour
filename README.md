@@ -59,6 +59,11 @@ Downloading
 - Renew an expired link without losing progress: change the address in
   Properties, or choose Refresh address from the browser and start the
   download again in your browser.
+- A download that slows to a crawl is reconnected; a second speed limit
+  for part of the day; the computer stays awake while downloads run.
+- Search the list (Ctrl+F), sort it, choose its columns; rename or move a
+  download in Properties; deleted files go to the Recycle Bin; finished
+  files keep the server's date; a command can run for each finished file.
 
 Video and audio
 
@@ -68,14 +73,18 @@ Video and audio
 - Downpour uses the yt-dlp and FFmpeg you already have, or downloads the
   official builds for you after asking, verified against their published
   checksums. yt-dlp updates on its own schedule.
+- Choose the audio track's language, get subtitles or a plain-text
+  transcript, cut sponsor segments (SponsorBlock), keep tags, chapters and
+  cover art, download only part of a video, and pick MP3 at any bitrate,
+  M4A, Opus, FLAC or WAV.
 
 Browser and clipboard
 
 - A browser extension for Firefox, Chrome and Edge hands downloads to
   Downpour, adds "Download with Downpour" to link menus, and can collect every
   link on a page into a checklist. Alt+Shift+L downloads the focused link,
-  Alt+Shift+M grabs the page's video or audio, and capture can be switched
-  off per site. See docs\browser-extension.md to install it.
+  Alt+Shift+M grabs the page's video or audio, Alt+Shift+K lets the browser
+  keep the next download, and capture can be switched off per site. See docs\browser-extension.md to install it.
 - When a site's bot protection turns Downpour away, "Download with the
   browser instead" hands the file back to the browser.
 - Copy a link to a downloadable file and Downpour offers to download it.

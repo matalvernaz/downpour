@@ -263,9 +263,9 @@ def with_audio_language(selector: str, language: str) -> str:
     """Prefer the audio track in ``language`` ("original" for the untouched
     one) and fall back to the plain selector when no such track exists."""
     language = (language or "").strip()
-    if not language:
-        return selector
-    cond = "[language=original]" if language == "original" else f"[language^={language}]"
+    if not language or language == "original":
+        return selector  # the site's default track is the original one
+    cond = f"[language^={language}]"
     preferred = []
     for alt in selector.split("/"):
         if "+ba" in alt:
@@ -287,7 +287,7 @@ def media_option_args(options: dict, ffmpeg: str | None, choice: "Choice | None"
         elif subs == "text" and ffmpeg:
             args += ["--convert-subs", "srt"]
     if options.get("sponsorblock") and ffmpeg:
-        args += ["--sponsorblock-remove", "sponsor,selfpromo,interaction,intro,outro"]
+        args += ["--sponsorblock-remove", "sponsor,selfpromo,interaction"]
     if options.get("metadata") and ffmpeg:
         args += ["--embed-metadata", "--embed-chapters"]
         if choice and choice.audio_only:
@@ -860,6 +860,10 @@ class MediaTask:
             dl.size = dl.downloaded = os.path.getsize(final_path)
             if (dl.media_options or {}).get("subtitles") == "text":
                 self._write_transcript(final_path)
+            if self.engine.settings.after_download_command.strip():
+                from downpour.core import winutil
+
+                winutil.run_after_download(self.engine.settings.after_download_command, final_path)
         dl.completed_at = time.time()
         if self.engine.settings.mark_of_the_web and final_path:
             from downpour.core import net, winutil

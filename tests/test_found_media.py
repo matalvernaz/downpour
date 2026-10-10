@@ -73,7 +73,7 @@ def test_audio_language_is_preferred_then_falls_back():
 
     assert with_audio_language("bv*+ba/b", "") == "bv*+ba/b"
     assert with_audio_language("bv*+ba/b", "en") == "bv*+ba[language^=en]/bv*+ba/b"
-    assert with_audio_language("ba/b", "original") == "ba[language=original]/ba/b"
+    assert with_audio_language("ba/b", "original") == "ba/b"  # the default track is the original one
     assert with_audio_language("b", "fr") == "b"  # nothing to prefer in a single-file selector
 
 

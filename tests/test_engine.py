@@ -511,3 +511,11 @@ def test_a_crawling_download_is_reconnected(server, make_engine, fast_retry):
     server.files["/crawl.bin"].delay = 0.0
     done = wait_for(engine, dl.id, Status.COMPLETED, timeout=60)
     assert read(done.path) == data
+
+
+def test_rename_before_the_download_has_a_folder(make_engine):
+    engine = make_engine()
+    dl = engine.add(Download(url="https://example.com/x.zip"), start=False)
+    assert dl.directory == ""
+    engine.relocate(dl.id, "better.zip")
+    assert dl.filename == "better.zip" and dl.filename_fixed and dl.directory == ""
