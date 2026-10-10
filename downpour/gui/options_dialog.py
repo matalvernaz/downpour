@@ -267,6 +267,12 @@ class OptionsDialog(wx.Dialog):
         labels = [c.label for c in media.PRESETS]
         default = next((i for i, c in enumerate(media.PRESETS) if c.key == s.media_format), 0)
         self.media_format = forms.choice(p, sz, "Default &quality for video and audio:", labels, default)
+        self.audio_language = forms.text(p, sz, "Preferred audio track &language (for example en, or original; empty for the site's default):", s.audio_language)
+        self.subtitles = forms.choice(p, sz, "Su&btitles by default:", [label for _, label in media.SUBTITLE_MODES],
+                                      next((i for i, (k, _) in enumerate(media.SUBTITLE_MODES) if k == s.subtitles), 0))
+        self.subtitle_language = forms.text(p, sz, "Subtitle language (for example en):", s.subtitle_language)
+        self.sponsorblock = forms.check(p, sz, "Cut sponsor segments with Sponsor&Block by default", s.sponsorblock)
+        self.media_metadata = forms.check(p, sz, "Put tags, chapters and cover art in video and audio files", s.media_metadata)
         self.tool_status = forms.readonly(p, sz, "&Helper programs:", self._tool_text(), lines=3)
         row = wx.BoxSizer(wx.HORIZONTAL)
         for label, handler in (
@@ -385,6 +391,11 @@ class OptionsDialog(wx.Dialog):
         s.schedule_days = [i for i, cb in enumerate(self.days) if cb.GetValue()]
         s.when_done = WHEN_DONE[self.when_done.GetSelection()][0]
         s.media_format = media.PRESETS[self.media_format.GetSelection()].key
+        s.audio_language = self.audio_language.GetValue().strip()
+        s.subtitles = media.SUBTITLE_MODES[self.subtitles.GetSelection()][0]
+        s.subtitle_language = self.subtitle_language.GetValue().strip() or "en"
+        s.sponsorblock = self.sponsorblock.GetValue()
+        s.media_metadata = self.media_metadata.GetValue()
         s.ytdlp_path = self.ytdlp_path.GetValue().strip()
         s.ffmpeg_path = self.ffmpeg_path.GetValue().strip()
         s.categories = [Category(c.name, c.extensions, c.folder) for c in s.categories]

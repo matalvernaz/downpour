@@ -127,6 +127,11 @@ class Settings:
 
     # Media (yt-dlp)
     media_format: str = "best-mp4"
+    audio_language: str = ""  # preferred audio track language ("en", "original"); empty = the site's default
+    subtitles: str = "none"  # none | embed | file | text (a plain-text transcript)
+    subtitle_language: str = "en"
+    sponsorblock: bool = False  # cut sponsor segments with SponsorBlock (needs FFmpeg)
+    media_metadata: bool = True  # tags, chapters and cover art in the file (needs FFmpeg)
     ytdlp_path: str = ""
     ffmpeg_path: str = ""
 

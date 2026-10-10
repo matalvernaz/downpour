@@ -227,6 +227,8 @@ class Choice:
     audio_only: bool = False
     needs_ffmpeg: bool = False
     extract_mp3: bool = False
+    audio_format: str = ""  # convert the audio to this (yt-dlp -x --audio-format)
+    audio_quality: str = ""  # bitrate such as 192K, or empty for the best
 
 
 PRESETS = [
@@ -238,8 +240,79 @@ PRESETS = [
     Choice("480", "Video up to 480p", "bv*[height<=480]+ba/b[height<=480]/b", needs_ffmpeg=True),
     Choice("single", "Best single-file video (no FFmpeg needed)", "b"),
     Choice("audio", "Audio only, best quality, original format", "ba/b", audio_only=True),
-    Choice("mp3", "Audio only, converted to MP3", "ba/b", audio_only=True, needs_ffmpeg=True, extract_mp3=True),
+    Choice("mp3", "Audio only, converted to MP3 (best quality)", "ba/b", audio_only=True, needs_ffmpeg=True, extract_mp3=True),
+    Choice("mp3-192", "Audio only, MP3 at 192 kbps", "ba/b", audio_only=True, needs_ffmpeg=True, audio_format="mp3", audio_quality="192K"),
+    Choice("mp3-128", "Audio only, MP3 at 128 kbps", "ba/b", audio_only=True, needs_ffmpeg=True, audio_format="mp3", audio_quality="128K"),
+    Choice("m4a", "Audio only, M4A (AAC)", "ba[ext=m4a]/ba/b", audio_only=True, needs_ffmpeg=True, audio_format="m4a"),
+    Choice("opus", "Audio only, Opus", "ba[ext=webm]/ba/b", audio_only=True, needs_ffmpeg=True, audio_format="opus"),
+    Choice("flac", "Audio only, converted to FLAC (lossless container)", "ba/b", audio_only=True, needs_ffmpeg=True, audio_format="flac"),
+    Choice("wav", "Audio only, converted to WAV", "ba/b", audio_only=True, needs_ffmpeg=True, audio_format="wav"),
 ]
+
+# The per-download options a Download's media_options may hold.
+MEDIA_OPTIONS = ("audio_language", "subtitles", "subtitle_language", "sponsorblock", "metadata", "clip_start", "clip_end")
+SUBTITLE_MODES = [
+    ("none", "No subtitles"),
+    ("embed", "Subtitles inside the video"),
+    ("file", "Subtitles as a separate file"),
+    ("text", "A plain-text transcript beside the file"),
+]
+
+
+def with_audio_language(selector: str, language: str) -> str:
+    """Prefer the audio track in ``language`` ("original" for the untouched
+    one) and fall back to the plain selector when no such track exists."""
+    language = (language or "").strip()
+    if not language:
+        return selector
+    cond = "[language=original]" if language == "original" else f"[language^={language}]"
+    preferred = []
+    for alt in selector.split("/"):
+        if "+ba" in alt:
+            preferred.append(alt.replace("+ba", f"+ba{cond}", 1))
+        elif alt.startswith("ba"):
+            preferred.append(f"ba{cond}" + alt[2:])
+    return "/".join(preferred + [selector]) if preferred else selector
+
+
+def media_option_args(options: dict, ffmpeg: str | None, choice: "Choice | None") -> list[str]:
+    """yt-dlp arguments for a download's media_options."""
+    args: list[str] = []
+    subs = str(options.get("subtitles") or "none")
+    lang = str(options.get("subtitle_language") or "en")
+    if subs != "none":
+        args += ["--sub-langs", f"{lang}.*,{lang},-live_chat", "--write-subs", "--write-auto-subs"]
+        if subs == "embed" and ffmpeg and not (choice and choice.audio_only):
+            args += ["--embed-subs"]
+        elif subs == "text" and ffmpeg:
+            args += ["--convert-subs", "srt"]
+    if options.get("sponsorblock") and ffmpeg:
+        args += ["--sponsorblock-remove", "sponsor,selfpromo,interaction,intro,outro"]
+    if options.get("metadata") and ffmpeg:
+        args += ["--embed-metadata", "--embed-chapters"]
+        if choice and choice.audio_only:
+            args += ["--embed-thumbnail"]
+    start, end = str(options.get("clip_start") or "").strip(), str(options.get("clip_end") or "").strip()
+    if (start or end) and ffmpeg:
+        args += ["--download-sections", f"*{start or '0'}-{end or 'inf'}", "--force-keyframes-at-cuts"]
+    return args
+
+
+def transcript_from_srt(text: str) -> str:
+    """The spoken words of an SRT file, one paragraph, no numbering or
+    times and no repeated lines (auto captions repeat as they scroll)."""
+    import re
+
+    lines, last = [], ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.isdigit() or "-->" in line:
+            continue
+        line = re.sub(r"<[^>]+>", "", line)
+        if line != last:
+            lines.append(line)
+            last = line
+    return " ".join(lines)
 
 
 def preset(key: str) -> Choice:
@@ -532,8 +605,8 @@ def found_streams(raw: object) -> list[FoundStream]:
 
 
 def suggested_name(info: MediaInfo, choice: Choice) -> str:
-    if choice.extract_mp3:
-        ext = "mp3"
+    if choice.extract_mp3 or choice.audio_format:
+        ext = "mp3" if choice.extract_mp3 else choice.audio_format
     elif choice.key == "best-mp4":
         ext = "mp4"
     elif choice.audio_only:
@@ -611,6 +684,8 @@ class MediaTask:
         ffmpeg = find_ffmpeg(s)
         if choice and choice.needs_ffmpeg and not ffmpeg:
             selector = "ba/b" if choice.audio_only else "b"  # cannot merge streams without FFmpeg
+        options = dict(dl.media_options or {})
+        selector = with_audio_language(selector, str(options.get("audio_language") or ""))
         # The output template is the whole path, and yt-dlp reads "%(...)" in
         # it as a field: a title holding "%(" would be mangled, so escape.
         stem = Path(dl.filename).stem.replace("%", "%%") if dl.filename else "%(title).180B"
@@ -631,6 +706,11 @@ class MediaTask:
                 cmd += ["--merge-output-format", "mp4"]
             if choice and choice.extract_mp3:
                 cmd += ["-x", "--audio-format", "mp3", "--audio-quality", "0"]
+            elif choice and choice.audio_format:
+                cmd += ["-x", "--audio-format", choice.audio_format]
+                if choice.audio_quality:
+                    cmd += ["--audio-quality", choice.audio_quality]
+        cmd += media_option_args(options, ffmpeg, choice)
         limit = dl.speed_limit or s.effective_speed_limit()
         if limit:
             cmd += ["--limit-rate", str(limit)]
@@ -727,6 +807,24 @@ class MediaTask:
                 tail = (tail + [line])[-40:]
         return final_path, tail
 
+    def _write_transcript(self, final_path: str) -> None:
+        """Turn the subtitle file yt-dlp saved beside the media into a
+        plain-text transcript, and remove the subtitle file."""
+        stem = os.path.splitext(final_path)[0]
+        folder = os.path.dirname(final_path)
+        for name in sorted(os.listdir(folder)):
+            path = os.path.join(folder, name)
+            if path.startswith(stem + ".") and name.lower().endswith((".srt", ".vtt")):
+                try:
+                    words = transcript_from_srt(open(path, encoding="utf-8", errors="replace").read())
+                    with open(stem + " transcript.txt", "w", encoding="utf-8") as out:
+                        out.write(words + "\n")
+                    os.remove(path)
+                    log.info("media download %s: transcript written beside the file", self.dl.id)
+                except OSError:
+                    log.warning("media download %s: could not write the transcript", self.dl.id, exc_info=True)
+                return
+
     def _progress(self, payload: str) -> None:
         try:
             p = json.loads(payload)
@@ -760,6 +858,8 @@ class MediaTask:
         if final_path and os.path.exists(final_path):
             dl.directory, dl.filename = os.path.dirname(final_path), os.path.basename(final_path)
             dl.size = dl.downloaded = os.path.getsize(final_path)
+            if (dl.media_options or {}).get("subtitles") == "text":
+                self._write_transcript(final_path)
         dl.completed_at = time.time()
         if self.engine.settings.mark_of_the_web and final_path:
             from downpour.core import net, winutil

@@ -66,3 +66,38 @@ def test_one_stream_keeps_the_plain_title():
     [only] = stream_downloads(found_streams([{"url": "https://cdn.example.com/a", "mime": "audio/mpeg"}]),
                               "https://example.com/p", "Book 1", "UA", "best-mp4")
     assert only.filename == "Book 1.mp3"
+
+
+def test_audio_language_is_preferred_then_falls_back():
+    from downpour.core.media import with_audio_language
+
+    assert with_audio_language("bv*+ba/b", "") == "bv*+ba/b"
+    assert with_audio_language("bv*+ba/b", "en") == "bv*+ba[language^=en]/bv*+ba/b"
+    assert with_audio_language("ba/b", "original") == "ba[language=original]/ba/b"
+    assert with_audio_language("b", "fr") == "b"  # nothing to prefer in a single-file selector
+
+
+def test_media_option_arguments():
+    from downpour.core.media import PRESETS, media_option_args, preset
+
+    video = preset("best-mp4")
+    assert media_option_args({}, "ffmpeg.exe", video) == []
+    args = media_option_args({"subtitles": "embed", "subtitle_language": "fr", "sponsorblock": True, "metadata": True,
+                              "clip_start": "1:30", "clip_end": "12:00"}, "ffmpeg.exe", video)
+    assert "--embed-subs" in args and "fr.*,fr,-live_chat" in args
+    assert "--sponsorblock-remove" in args and "--embed-chapters" in args
+    assert "*1:30-12:00" in args and "--force-keyframes-at-cuts" in args
+    # Without FFmpeg nothing that needs it is asked for, but subtitle files still come.
+    args = media_option_args({"subtitles": "file", "sponsorblock": True, "metadata": True, "clip_start": "5"}, None, video)
+    assert "--write-subs" in args and "--sponsorblock-remove" not in args and "--download-sections" not in args
+    # Audio-only downloads get the cover art; a transcript asks for SRT.
+    args = media_option_args({"subtitles": "text", "metadata": True}, "ffmpeg.exe", preset("mp3"))
+    assert "--embed-thumbnail" in args and "srt" in args
+    assert any(c.audio_format == "flac" for c in PRESETS)
+
+
+def test_transcript_drops_numbers_times_tags_and_repeats():
+    from downpour.core.media import transcript_from_srt
+
+    srt = "1\n00:00:01,000 --> 00:00:03,000\n<c>Hello</c> there\n\n2\n00:00:03,000 --> 00:00:05,000\nHello there\n\n3\n00:00:05,000 --> 00:00:07,000\nGeneral Kenobi\n"
+    assert transcript_from_srt(srt) == "Hello there General Kenobi"

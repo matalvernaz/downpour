@@ -7,6 +7,7 @@ is still on the summary), so the screen reader announces that it is ready.
 
 from __future__ import annotations
 
+import re
 import threading
 from pathlib import Path
 
@@ -47,13 +48,24 @@ class MediaDialog(wx.Dialog):
         self.folder = forms.folder_row(self, sizer, "Save &to:", folder_for_category(settings, "Video"))
         self.whole_playlist = forms.check(self, sizer, "Download every item in the &playlist", True)
         self.whole_playlist.Hide()
+        self.audio_language = forms.text(
+            self, sizer, "Audio track lan&guage (for example en, fr, or original; empty for the site's default):",
+            settings.audio_language,
+        )
+        self.subtitles = forms.choice(self, sizer, "Su&btitles:", [label for _, label in media.SUBTITLE_MODES],
+                                      next((i for i, (k, _) in enumerate(media.SUBTITLE_MODES) if k == settings.subtitles), 0))
+        self.subtitle_language = forms.text(self, sizer, "Subtitle language (for example en):", settings.subtitle_language)
+        self.sponsorblock = forms.check(self, sizer, "Cut sponsor segments (Sponsor&Block)", settings.sponsorblock)
+        self.metadata = forms.check(self, sizer, "Tags, chapters and cover art in the fi&le", settings.media_metadata)
+        self.clip_start = forms.text(self, sizer, "Only from (for example 1:30; empty for the start):", "")
+        self.clip_end = forms.text(self, sizer, "to (for example 12:00; empty for the end):", "")
         btns = forms.buttons(
             self, sizer,
             [(wx.ID_OK, "&Start download"), (wx.ID_APPLY, "Download &later"), (wx.ID_CANCEL, "Cancel")],
             default=wx.ID_OK,
         )
         self.SetSizer(sizer)
-        self.SetSize((720, 560))
+        self.SetSize((720, 760))
         self.CentreOnParent()
         default = next((i for i, c in enumerate(self.choices) if c.key == settings.media_format), 0)
         self.quality.SetSelection(default)
@@ -144,12 +156,29 @@ class MediaDialog(wx.Dialog):
             forms.message(self, "Choose a folder to save into.", icon=wx.ICON_WARNING)
             self.folder.SetFocus()
             return
+        for ctrl in (self.clip_start, self.clip_end):
+            if ctrl.GetValue().strip() and not TIME_RE.match(ctrl.GetValue().strip()):
+                forms.message(self, "Write the time like 90, 1:30 or 0:01:30.", icon=wx.ICON_WARNING)
+                ctrl.SetFocus()
+                return
         self.start_now = start
         self.chosen = self._choice()
         self.filename = self.name.GetValue().strip()
         self.directory = folder
+        self.media_options = {
+            "audio_language": self.audio_language.GetValue().strip(),
+            "subtitles": media.SUBTITLE_MODES[self.subtitles.GetSelection()][0],
+            "subtitle_language": self.subtitle_language.GetValue().strip() or "en",
+            "sponsorblock": self.sponsorblock.GetValue(),
+            "metadata": self.metadata.GetValue(),
+            "clip_start": self.clip_start.GetValue().strip(),
+            "clip_end": self.clip_end.GetValue().strip(),
+        }
         self.playlist = bool(self.info and self.info.is_playlist and self.whole_playlist.GetValue())
         self.EndModal(wx.ID_OK)
+
+
+TIME_RE = re.compile(r"^\d+(:[0-5]?\d){0,2}(\.\d+)?$")
 
 
 def media_format_value(choice: media.Choice) -> str:

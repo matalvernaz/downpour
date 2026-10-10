@@ -73,6 +73,9 @@ class Download:
     etag: str = ""
     last_modified: str = ""
     media_format: str = ""
+    # Extra choices for video and audio (see core/media.py MEDIA_OPTIONS):
+    # audio_language, subtitles, sponsorblock, metadata, clip_start, clip_end.
+    media_options: dict = field(default_factory=dict)
     added_at: float = field(default_factory=time.time)
     completed_at: float | None = None
     position: float = 0.0

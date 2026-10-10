@@ -492,7 +492,10 @@ class Controller:
                 return
             chosen, filename, directory = dlg.chosen, dlg.filename, dlg.directory
             start, playlist, info = dlg.start_now, dlg.playlist, dlg.info
-        if chosen.needs_ffmpeg and not media.find_ffmpeg(self.settings):
+            options = dlg.media_options
+        needs_ffmpeg = chosen.needs_ffmpeg or options.get("sponsorblock") or options.get("subtitles") in ("embed", "text") \
+            or options.get("clip_start") or options.get("clip_end")
+        if needs_ffmpeg and not media.find_ffmpeg(self.settings):
             self.ensure_ffmpeg(optional=True)
         if playlist and info is not None:
             if chosen.key.startswith("id:"):
@@ -504,7 +507,7 @@ class Controller:
         added = 0
         for item_url, name, title in items:
             dl = Download(
-                url=item_url, kind="media", media_format=media_format_value(chosen),
+                url=item_url, kind="media", media_format=media_format_value(chosen), media_options=dict(options),
                 filename=name, filename_fixed=True, directory=directory, description=title,
                 cookies=cookies or [], user_agent=user_agent, referrer=referrer,
             )
