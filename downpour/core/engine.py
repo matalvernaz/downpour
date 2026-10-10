@@ -156,8 +156,12 @@ class Engine:
                     continue
                 task = self._tasks.get(i)
                 if task is not None:
-                    if task.stopping and i not in self._after_stop:
-                        self._after_stop[i] = ("restart",)  # still winding down; go again after
+                    if task.stopping:  # still winding down; go again after
+                        pending = self._after_stop.get(i, ("",))[0]
+                        if pending == "":
+                            self._after_stop[i] = ("restart",)
+                        elif pending == "redownload":
+                            self._after_stop[i] = ("redownload", True)
                     continue
                 if dl.status in (Status.PAUSED, Status.FAILED, Status.QUEUED):
                     dl.status = Status.QUEUED
@@ -180,9 +184,13 @@ class Engine:
                 self._forced.discard(i)
                 task = self._tasks.get(i)
                 if task is not None:
-                    # Pausing overrides a pending restart, never a removal or redownload.
-                    if self._after_stop.get(i, ("",))[0] == "restart":
+                    # Pausing cancels a pending restart, never a removal; a
+                    # pending redownload still starts over, but stays paused.
+                    pending = self._after_stop.get(i, ("",))[0]
+                    if pending == "restart":
                         del self._after_stop[i]
+                    elif pending == "redownload":
+                        self._after_stop[i] = ("redownload", False)
                     task.stop(Status.PAUSED)
                 elif dl.status == Status.QUEUED:
                     dl.status = Status.PAUSED
@@ -239,12 +247,12 @@ class Engine:
                 return
             task = self._tasks.get(download_id)
             if task is not None:
-                self._after_stop[download_id] = ("redownload",)
+                self._after_stop[download_id] = ("redownload", True)
                 task.stop(Status.PAUSED)
                 return
         self._reset(dl)
 
-    def _reset(self, dl: Download) -> None:
+    def _reset(self, dl: Download, start: bool = True) -> None:
         if dl.part_path:
             _unlink(dl.part_path)
         if dl.status == Status.COMPLETED and dl.path:
@@ -257,8 +265,9 @@ class Engine:
             dl.checksum_ok = None
             dl.completed_at = None
             dl.error = ""
-            dl.status = Status.QUEUED
-            self._forced.add(dl.id)
+            dl.status = Status.QUEUED if start else Status.PAUSED
+            if start:
+                self._forced.add(dl.id)
             self.save(dl)
         self._emit("changed", dl)
         self._schedule()
@@ -371,7 +380,7 @@ class Engine:
         if after[0] == "remove":
             self._finish_remove(dl, after[1])
         elif after[0] == "redownload":
-            self._reset(dl)
+            self._reset(dl, start=after[1])
         else:
             event = {Outcome.COMPLETED: "completed", Outcome.FAILED: "failed"}.get(outcome, "changed")
             self._emit(event, dl)

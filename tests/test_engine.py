@@ -266,13 +266,28 @@ def test_unchanged_file_resumes_with_if_range(server, make_engine):
 
 
 def test_pause_does_not_cancel_a_removal(server, make_engine):
-    url = server.add("/doomed.bin", payload(1024 * 1024), delay=0.01)
-    engine = make_engine()
+    url = server.add("/doomed.bin", payload(1024 * 1024), delay=0.02)
+    engine = make_engine(max_connections=1)  # slow enough to still be running
     dl = add(engine, url)
     wait_until(lambda: dl.downloaded > 0, message="some progress")
-    engine.remove([dl.id])
-    engine.pause([dl.id])  # while the task is still winding down
-    wait_until(lambda: engine.get(dl.id) is None, message="removal")
+    with engine._lock:  # the stopping task cannot finish until both calls are in
+        engine.remove([dl.id])
+        engine.pause([dl.id])
+    # The removal finishes on the task's thread, the file last.
+    wait_until(lambda: engine.get(dl.id) is None and not os.path.exists(dl.part_path), message="removal")
+
+
+def test_pause_after_download_again_starts_over_paused(server, make_engine):
+    url = server.add("/redo.bin", payload(1024 * 1024), delay=0.02)
+    engine = make_engine(max_connections=1)  # slow enough to still be running
+    dl = add(engine, url)
+    wait_until(lambda: dl.downloaded > 0, message="some progress")
+    with engine._lock:  # the stopping task cannot finish until both calls are in
+        engine.redownload(dl.id)
+        engine.pause([dl.id])
+    # The reset runs on the task's thread just after it stops.
+    wait_until(lambda: dl.downloaded == 0 and not dl.segments, message="the reset")
+    assert dl.status == Status.PAUSED and not engine.is_running(dl.id)
     assert not os.path.exists(dl.part_path)
 
 
