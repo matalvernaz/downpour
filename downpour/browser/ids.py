@@ -20,7 +20,10 @@ HOST_NAME = "io.github.matalvernaz.downpour"
 # the host manifest can name it in advance. IDs assigned by the Chrome Web
 # Store or Edge Add-ons belong in this list too once the extension is published
 # there.
-CHROMIUM_EXTENSION_IDS: list[str] = ["biniilicelamnmgkghjfbhajjmamlldn"]
+CHROMIUM_EXTENSION_IDS: list[str] = [
+    "biniilicelamnmgkghjfbhajjmamlldn",  # unpacked, from the manifest key
+    "papnanikngmdnacmhecbigmbkbjfaboa",  # Chrome Web Store
+]
 
 # Firefox takes the ID verbatim from browser_specific_settings.gecko.id.
 FIREFOX_EXTENSION_ID = "downpour@matalvernaz.github.io"

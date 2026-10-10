@@ -103,8 +103,9 @@ Privacy policy URL: the public copy of `store/privacy-policy.md`.
 This extension is the companion of the Downpour desktop app for Windows. Without the app, the panel says Downpour's browser helper is not installed and every download stays in Chrome. With it, downloads of the file types chosen in Downpour are handed to the app, and the context menu items send links to it.
 ```
 
-## After approval
+## Store item
 
-Add the store's extension ID to `CHROMIUM_EXTENSION_IDS` in
-`downpour/browser/ids.py`, rebuild, and install again, so the browser
-helper accepts the store copy as well as the unpacked one.
+ID `papnanikngmdnacmhecbigmbkbjfaboa`, listed in `CHROMIUM_EXTENSION_IDS`
+in `downpour/browser/ids.py` so the browser helper accepts the store copy
+as well as the unpacked one. A Downpour installed before that change
+needs installing again.
