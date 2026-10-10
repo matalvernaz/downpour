@@ -89,7 +89,8 @@ Data usage: check Authentication information (cookies), Web history (the
 addresses of downloads and pages) and Website content (links collected
 when the user asks). Then check all three certifications.
 
-Privacy policy URL: the public copy of `store/privacy-policy.md`.
+Privacy policy URL: https://gist.github.com/matalvernaz/8a85b46d09ac8675ab8a93d106a2ccc6
+(the public copy of `store/privacy-policy.md`; update the gist when the policy changes).
 
 ## Distribution tab
 
