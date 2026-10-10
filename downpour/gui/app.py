@@ -16,7 +16,7 @@ from pathlib import Path
 import wx
 
 from downpour import APP_NAME, __version__
-from downpour.core import filenames, ipc, logs, winutil
+from downpour.core import filenames, ipc, logs, updates, winutil
 from downpour.core import settings as settings_mod
 from downpour.core.engine import Engine
 from downpour.core.logs import redact_url, summarize_cookies
@@ -95,6 +95,8 @@ class Controller:
         self.timer = wx.Timer()
         self.timer.Bind(wx.EVT_TIMER, self._tick)
         self.timer.Start(2000)
+        self._started = time.monotonic()
+        self._update_checking = False
         engine.subscribe(self._on_engine_event)
 
     # -- engine events (any thread) -------------------------------------------
@@ -128,6 +130,7 @@ class Controller:
             tip = "Downpour"
         self.tray.set_tooltip(tip)
         self._check_schedule()
+        self._maybe_check_updates()
 
     # -- requests from the browser host and the command line (IPC thread) ------
 
@@ -556,6 +559,107 @@ class Controller:
         elif answer == wx.ID_NO:
             self.open_folder(dl)
 
+    # -- updates ---------------------------------------------------------------------
+
+    def note_version(self) -> None:
+        """Once after an update: say so, and clear out the downloaded setup."""
+        previous = self.settings.last_run_version
+        if previous == __version__:
+            return
+        if previous:
+            log.info("updated from %s to %s", previous, __version__)
+            wx.CallLater(1500, self.feedback.say, f"Downpour updated to version {__version__}")
+        self.settings.last_run_version = __version__
+        settings_mod.save(self.settings)
+        updates.clean_downloads()
+
+    def _maybe_check_updates(self) -> None:
+        s = self.settings
+        if (not s.check_for_updates or self._update_checking or not updates.supported()
+                or time.monotonic() - self._started < 30
+                or time.time() - s.last_update_check < updates.CHECK_INTERVAL):
+            return
+        self.check_updates(manual=False)
+
+    def check_updates(self, manual: bool = True) -> None:
+        """Ask GitHub for a newer release, on a thread. ``manual`` (the Help
+        menu) always reports the outcome; an automatic check stays quiet
+        unless there is something to offer."""
+        if not updates.supported():
+            if manual:
+                forms.message(self._parent(), "Updates are for the installed copy of Downpour; this one runs from source.")
+            return
+        if self._update_checking:
+            return
+        self._update_checking = True
+        if manual:
+            self.feedback.say("Checking for updates")
+
+        def work():
+            try:
+                release, error = updates.latest(), None
+            except Exception as e:  # noqa: BLE001 - reported below
+                release, error = None, e
+                log.warning("update check failed: %s", logs.describe_error(e))
+            wx.CallAfter(self._update_checked, release, error, manual)
+
+        threading.Thread(target=work, name="update-check", daemon=True).start()
+
+    def _update_checked(self, release, error, manual: bool) -> None:
+        self._update_checking = False
+        self.settings.last_update_check = time.time()
+        settings_mod.save(self.settings)
+        if error is not None:
+            if manual:
+                forms.message(self._parent(), f"Could not check for updates: {error}", icon=wx.ICON_WARNING)
+            return
+        if release is None or not updates.is_newer(release.version):
+            if manual:
+                forms.message(self._parent(), f"You have the newest version of Downpour, {__version__}.")
+            return
+        if not manual and release.version == self.settings.skipped_version:
+            log.info("update %s is available but the user skipped it", release.version)
+            return
+        self.feedback.say(f"Downpour {release.version} is available")
+        self._queue_dialog(lambda: self._offer_update(release))
+
+    def _offer_update(self, release) -> None:
+        notes = release.notes if len(release.notes) <= 1500 else release.notes[:1500] + "..."
+        msg = (f"Downpour {release.version} is available. You have {__version__}.\n\n"
+               f"{notes or 'The release has no notes.'}\n\n"
+               "Updating closes Downpour for a moment. Downloads in progress carry on afterwards.")
+        with wx.MessageDialog(self._parent(), msg, "Update available", wx.YES_NO | wx.CANCEL | wx.ICON_INFORMATION) as dlg:
+            # Escape means Cancel, so Cancel must be the harmless "Later".
+            dlg.SetYesNoCancelLabels("&Update now", "&Skip this version", "&Later")
+            answer = self._modal(dlg)
+        if answer == wx.ID_YES:
+            self._install_update(release)
+        elif answer == wx.ID_NO:
+            log.info("the user skipped update %s", release.version)
+            self.settings.skipped_version = release.version
+            settings_mod.save(self.settings)
+        else:
+            log.info("the user put off update %s", release.version)
+
+    def _install_update(self, release) -> None:
+        finished, result = run_with_progress(
+            self._parent(), "Updating Downpour", f"Downloading Downpour {release.version}:",
+            lambda progress, stop: updates.download(release, progress, stop),
+        )
+        if not finished:
+            log.info("update download cancelled")
+            return
+        if isinstance(result, BaseException):
+            log.error("update download failed", exc_info=(type(result), result, result.__traceback__))
+            forms.message(self._parent(), f"The update could not be downloaded: {result}", icon=wx.ICON_ERROR)
+            return
+        try:
+            updates.install(result)
+        except OSError as e:
+            forms.message(self._parent(), f"The update could not be started: {e}", icon=wx.ICON_ERROR)
+            return
+        self.feedback.say("Installing the update. Downpour restarts in a moment.")
+
     def open_log_folder(self) -> None:
         try:
             winutil.open_path(str(logs_dir()))
@@ -810,6 +914,7 @@ def run(urls: list[str] | None = None, tray: bool = False, debug: bool = False) 
     ctl = Controller(app, settings, engine, debug=debug)
     holder["ctl"] = ctl
     ctl.log_environment()
+    ctl.note_version()
     server.start()
     ready.set()
     engine.begin()

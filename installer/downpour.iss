@@ -69,6 +69,8 @@ Filename: "{app}\downpour-cli.exe"; Parameters: "autostart on"; Flags: runhidden
 Filename: "{app}\downpour-cli.exe"; Parameters: "autostart off"; Flags: runhidden waituntilterminated; Tasks: not autostart
 Filename: "{code:FirefoxExe}"; Parameters: """{app}\firefox\downpour-firefox.xpi"""; Description: "Add the Downpour extension to Firefox (Firefox asks you to confirm)"; Flags: postinstall nowait skipifsilent; Check: FirefoxReady
 Filename: "{app}\Downpour.exe"; Description: "Start Downpour"; Flags: postinstall nowait skipifsilent
+; Downpour's own updater runs this setup with /SILENT /RELAUNCH.
+Filename: "{app}\Downpour.exe"; Flags: nowait; Check: RelaunchRequested
 
 [UninstallRun]
 Filename: "{app}\downpour-cli.exe"; Parameters: "quit"; Flags: runhidden waituntilterminated; RunOnceId: "QuitDownpour"
@@ -76,6 +78,11 @@ Filename: "{app}\downpour-cli.exe"; Parameters: "helper remove"; Flags: runhidde
 Filename: "{app}\downpour-cli.exe"; Parameters: "autostart off"; Flags: runhidden waituntilterminated; RunOnceId: "AutostartOff"
 
 [Code]
+function RelaunchRequested: Boolean;
+begin
+  Result := Pos('/RELAUNCH', Uppercase(GetCmdTail)) > 0;
+end;
+
 function ChromeInstalled: Boolean;
 begin
   Result := FileExists(ExpandConstant('{commonpf64}\Google\Chrome\Application\chrome.exe'))

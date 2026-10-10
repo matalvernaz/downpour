@@ -18,6 +18,13 @@ It installs for your account only, with no administrator prompt, into
 - the Mozilla-signed Firefox extension: Firefox asks you to confirm;
 - a desktop shortcut.
 
+Downpour then keeps itself up to date: once a day it checks the Releases
+page, tells you when there is a new version, and asks before installing
+it. The update checks the download against its published checksum,
+closes Downpour for a moment (downloads carry on afterwards) and starts
+it again. Help, Check for updates checks at once; the General tab of
+Options turns the daily check off.
+
 The setup is not code-signed yet, so Windows SmartScreen may say it
 protected your PC; choose More info, then Run anyway. To remove Downpour,
 use Settings, Apps. The uninstaller asks whether to delete your settings,

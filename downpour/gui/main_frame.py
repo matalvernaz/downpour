@@ -204,6 +204,7 @@ class MainFrame(wx.Frame):
 
         help_ = wx.Menu()
         self._item(help_, "&Keyboard shortcuts\tF1", lambda e: self.show_shortcuts())
+        self._item(help_, "Check for &updates", lambda e: c.check_updates(manual=True))
         self._item(help_, "Open the &log folder", lambda e: c.open_log_folder())
         self._item(help_, "&About Downpour", lambda e: c.about())
         bar.Append(help_, "&Help")

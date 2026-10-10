@@ -5,8 +5,8 @@ setlocal
 cd /d "%~dp0"
 set PY=.venv\Scripts\python.exe
 if not exist %PY% set PY=python
-taskkill /IM Downpour.exe /F >nul 2>&1
-taskkill /IM downpour-cli.exe /F >nul 2>&1
+REM Close copies running from this build's folder only, never an installed Downpour.
+powershell -NoProfile -Command "Get-Process Downpour,downpour-cli -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '%~dp0dist\*' } | Stop-Process -Force" >nul 2>&1
 if not exist downpour\vendor\nvdaControllerClient.dll %PY% tools\fetch_nvda_client.py || exit /b 1
 %PY% tools\version_info.py || exit /b 1
 %PY% -m PyInstaller downpour.spec --noconfirm --distpath dist --workpath build\pyinstaller || exit /b 1

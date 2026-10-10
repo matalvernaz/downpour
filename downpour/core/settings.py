@@ -94,6 +94,12 @@ class Settings:
     when_done: str = "nothing"  # nothing | exit | sleep | hibernate | shutdown
     detailed_logging: bool = True  # HTTP exchanges, pipe requests, yt-dlp output; see core/logs.py
 
+    # Updates (core/updates.py)
+    check_for_updates: bool = True
+    skipped_version: str = ""
+    last_update_check: float = 0.0  # time.time() of the last automatic check
+    last_run_version: str = ""  # to say "updated to ..." once after an update
+
     # Scheduler
     schedule_enabled: bool = False
     schedule_start: str = "02:00"
@@ -185,8 +191,10 @@ def from_dict(raw: dict) -> Settings:
     return s
 
 
-# Settings whose values never go into a log file.
+# Settings whose values never go into a log file, and bookkeeping that is
+# not worth reporting as a change.
 _PRIVATE = frozenset({"proxy_url"})
+_BOOKKEEPING = frozenset({"last_update_check", "last_run_version"})
 
 
 def _loggable(key: str, value: object) -> str:
@@ -202,7 +210,7 @@ def differences(old: Settings | dict, new: Settings | dict) -> list[str]:
     b = asdict(new) if isinstance(new, Settings) else new
     out = []
     for key in b:
-        if a.get(key) == b[key]:
+        if key in _BOOKKEEPING or a.get(key) == b[key]:
             continue
         before, after = a.get(key), b[key]
         if isinstance(before, list) and isinstance(after, list) and all(isinstance(x, str) for x in before + after):
