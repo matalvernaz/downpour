@@ -44,6 +44,10 @@ class Speech:
         self._dll = dll
 
     @property
+    def loaded(self) -> bool:
+        return self._dll is not None
+
+    @property
     def available(self) -> bool:
         return self._dll is not None and self._dll.nvdaController_testIfRunning() == 0
 
@@ -54,9 +58,13 @@ class Speech:
         try:
             if interrupt:
                 self._dll.nvdaController_cancelSpeech()
-            return self._dll.nvdaController_speakText(text) == 0
-        except OSError:
+            code = self._dll.nvdaController_speakText(text)
+        except OSError as e:
+            log.debug("NVDA could not speak %r: %r", text, e)
             return False
+        if code != 0:
+            log.debug("NVDA did not speak %r (error %s; NVDA is probably not running)", text, code)
+        return code == 0
 
 
 class Feedback:
@@ -85,8 +93,12 @@ class Feedback:
     def say(self, text: str, interrupt: bool = False) -> bool:
         """Speak if the user wants spoken announcements. True if spoken."""
         if not self.settings.speak_events:
+            log.debug("not spoken (speech is off in Options): %s", text)
             return False
-        return self.speech.speak(text, interrupt)
+        spoken = self.speech.speak(text, interrupt)
+        if spoken:
+            log.debug("spoken: %s", text)
+        return spoken
 
     def announce(self, title: str, message: str, sound: str | None = None, spoken: str | None = None) -> None:
         if sound:
@@ -94,5 +106,6 @@ class Feedback:
         if self.say(spoken or f"{title}. {message}"):
             return
         if self.settings.notify_complete:
+            log.debug("notification: %s: %s", title, message)
             note = wx.adv.NotificationMessage(title, message)
             note.Show(timeout=wx.adv.NotificationMessage.Timeout_Auto)

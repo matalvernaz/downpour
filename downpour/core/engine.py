@@ -19,12 +19,14 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Callable, Iterable
 from urllib.parse import urlsplit
 
 from downpour.core import filenames
 from downpour.core.limiter import RateLimiter
+from downpour.core.logs import redact_url
 from downpour.core.models import ACTIVE, Download, Status
 from downpour.core.settings import Settings
 from downpour.core.store import Store
@@ -57,10 +59,19 @@ class Engine:
         self._listeners: list[Listener] = []
         self._closed = False
         self._busy = False
+        resumed = 0
         for dl in store.load_all():
             if dl.status in ACTIVE:
                 dl.status = Status.QUEUED  # running when the app last closed: carry on
+                resumed += 1
             self._downloads[dl.id] = dl
+        counts: dict[str, int] = {}
+        for dl in self._downloads.values():
+            counts[dl.status.value] = counts.get(dl.status.value, 0) + 1
+        log.info(
+            "loaded %d downloads (%s); %d were running when Downpour last closed",
+            len(self._downloads), ", ".join(f"{n} {s}" for s, n in sorted(counts.items())) or "none", resumed,
+        )
 
     def begin(self) -> None:
         """Start working through the queue, including downloads that were
@@ -132,6 +143,11 @@ class Engine:
             self._downloads[dl.id] = dl
             if start and force:
                 self._forced.add(dl.id)
+        log.info(
+            "added download %s: %s %s from %s into %s, %s",
+            dl.id, dl.kind, dl.filename or "(named later)", redact_url(dl.url), dl.directory or "the default folder",
+            ("starting now" if force else "queued") if start else "paused",
+        )
         self._emit("added", dl)
         self._schedule()
         return dl
@@ -148,6 +164,9 @@ class Engine:
         }
 
     def start(self, ids: Iterable[int], force: bool = True) -> None:
+        ids = list(ids)
+        if ids:
+            log.info("start requested for %s%s", ids, "" if force else " (in queue order)")
         changed = []
         with self._lock:
             for i in ids:
@@ -175,6 +194,9 @@ class Engine:
         self._schedule()
 
     def pause(self, ids: Iterable[int]) -> None:
+        ids = list(ids)
+        if ids:
+            log.info("pause requested for %s", ids)
         changed = []
         with self._lock:
             for i in ids:
@@ -211,6 +233,9 @@ class Engine:
         self.pause(ids)
 
     def remove(self, ids: Iterable[int], delete_files: bool = False) -> None:
+        ids = list(ids)
+        if ids:
+            log.info("remove requested for %s%s", ids, ", deleting finished files too" if delete_files else "")
         gone = []
         with self._lock:
             for i in ids:
@@ -241,6 +266,7 @@ class Engine:
     def redownload(self, download_id: int) -> None:
         """Throw away what was downloaded (including a finished file) and
         fetch it again from scratch."""
+        log.info("download again requested for %s", download_id)
         with self._lock:
             dl = self._downloads.get(download_id)
             if dl is None:
@@ -281,6 +307,7 @@ class Engine:
             dl = self._downloads.get(download_id)
             if dl is None:
                 return
+            log.info("download %s: new address %s (was %s)", download_id, redact_url(url), redact_url(dl.url))
             dl.url = url
             # A renewed link may come from another server whose ETag differs
             # for the same file; resume on the size check alone this once.
@@ -294,6 +321,7 @@ class Engine:
 
     def update(self, dl: Download) -> None:
         """Persist edits the GUI made to a download's details."""
+        log.debug("download %s: details edited", dl.id)
         with self._lock:
             self.save(dl)
             task = self._tasks.get(dl.id)
@@ -321,6 +349,10 @@ class Engine:
         self._emit("changed", None)
 
     def apply_settings(self) -> None:
+        log.debug(
+            "settings applied: total speed limit %s, %d downloads at once",
+            self.settings.effective_speed_limit() or "none", self.settings.max_active,
+        )
         self.limiter.set_rate(self.settings.effective_speed_limit())
         self._schedule()
 
@@ -377,6 +409,10 @@ class Engine:
                 self._forced.add(dl.id)
             if after[0] != "remove":
                 self.store.update(dl)
+        log.info(
+            "download %s: now %s%s%s", dl.id, dl.status.value, f" ({dl.error})" if dl.error else "",
+            f"; then {after[0]}" if after[0] else "",
+        )
         if after[0] == "remove":
             self._finish_remove(dl, after[1])
         elif after[0] == "redownload":
@@ -403,12 +439,17 @@ class Engine:
                 self._tasks[dl.id] = task
                 running += 1
                 started.append(task)
+                log.debug(
+                    "queue: starting download %s (%d running, %d allowed%s)", dl.id, running,
+                    self.settings.max_active, ", started by hand" if dl.id in self._forced else "",
+                )
             busy = bool(self._tasks) or any(d.status == Status.QUEUED for d in self._downloads.values())
             went_idle = self._busy and not busy
             self._busy = busy
         for task in started:
             task.start()
         if went_idle:
+            log.info("queue: nothing left to download")
             self._emit("idle", None)
 
     def shutdown(self, timeout: float = 20.0) -> None:
@@ -416,16 +457,22 @@ class Engine:
         with self._lock:
             self._closed = True
             tasks = list(self._tasks.values())
+        began = time.monotonic()
+        log.info("shutting down with %d downloads running", len(tasks))
         for task in tasks:
             task.stop(Status.QUEUED)
         for task in tasks:
             task.thread.join(timeout)
+            if task.thread.is_alive():
+                log.warning("download %s did not stop within %.0f seconds", task.dl.id, timeout)
         self.store.close()
+        log.info("shut down in %.1f s", time.monotonic() - began)
 
 
 def _unlink(path: str) -> None:
     try:
         os.remove(path)
+        log.debug("deleted %s", path)
     except FileNotFoundError:
         pass
     except OSError:

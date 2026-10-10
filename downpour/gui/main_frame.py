@@ -8,6 +8,7 @@ holds a one-line summary of what is running.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Callable
 
 import wx
@@ -20,6 +21,8 @@ from downpour.gui.download_list import DownloadList, summary
 
 if TYPE_CHECKING:
     from downpour.gui.app import Controller
+
+log = logging.getLogger(__name__)
 
 SPEED_PRESETS = [0, 256 * 1024, 512 * 1024, 1024**2, 2 * 1024**2, 5 * 1024**2, 10 * 1024**2]
 WHEN_DONE = [("nothing", "Do nothing"), ("exit", "Close Downpour"), ("sleep", "Sleep"), ("hibernate", "Hibernate"), ("shutdown", "Shut down")]
@@ -124,7 +127,13 @@ class MainFrame(wx.Frame):
 
     def _item(self, menu: wx.Menu, label: str, handler, kind=wx.ITEM_NORMAL) -> wx.MenuItem:
         item = menu.Append(wx.ID_ANY, label, kind=kind)
-        self.Bind(wx.EVT_MENU, handler, item)
+        name = label.split("\t")[0].replace("&", "")
+
+        def run(evt):
+            log.debug("menu: %s", name)  # what the user did just before a problem
+            handler(evt)
+
+        self.Bind(wx.EVT_MENU, run, item)
         return item
 
     def _build_menus(self):
@@ -195,6 +204,7 @@ class MainFrame(wx.Frame):
 
         help_ = wx.Menu()
         self._item(help_, "&Keyboard shortcuts\tF1", lambda e: self.show_shortcuts())
+        self._item(help_, "Open the &log folder", lambda e: c.open_log_folder())
         self._item(help_, "&About Downpour", lambda e: c.about())
         bar.Append(help_, "&Help")
         self.SetMenuBar(bar)
@@ -407,9 +417,13 @@ class MainFrame(wx.Frame):
                 menu.AppendSeparator()
                 continue
             item = menu.Append(wx.ID_ANY, label)
-            self.Bind(wx.EVT_MENU, lambda e, h=handler: h(), item)
+            self.Bind(wx.EVT_MENU, lambda e, h=handler, n=label: self._context_command(n, h), item)
         self.PopupMenu(menu)
         menu.Destroy()
+
+    def _context_command(self, name: str, handler) -> None:
+        log.debug("context menu: %s", name)
+        handler()
 
     def _on_close(self, evt):
         if self.exiting or not self.settings.close_to_tray or not evt.CanVeto():

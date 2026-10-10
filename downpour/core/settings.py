@@ -7,12 +7,15 @@ settings files survive upgrades in both directions.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 from downpour.core.paths import data_dir, downloads_dir
+
+log = logging.getLogger(__name__)
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -89,6 +92,7 @@ class Settings:
     start_with_windows: bool = False
     scan_after_download: bool = False
     when_done: str = "nothing"  # nothing | exit | sleep | hibernate | shutdown
+    detailed_logging: bool = True  # HTTP exchanges, pipe requests, yt-dlp output; see core/logs.py
 
     # Scheduler
     schedule_enabled: bool = False
@@ -144,7 +148,14 @@ def load() -> Settings:
     path = settings_path()
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except FileNotFoundError:
+        log.info("no settings file yet; using the defaults")
+        return Settings()
+    except (OSError, ValueError) as e:
+        log.warning("could not read %s (%s); using the defaults", path, e)
+        return Settings()
+    if not isinstance(raw, dict):
+        log.warning("%s does not hold a JSON object; using the defaults", path)
         return Settings()
     return from_dict(raw)
 
@@ -159,16 +170,48 @@ def from_dict(raw: dict) -> Settings:
             try:
                 value = [Category(**c) for c in value]
             except TypeError:
+                log.warning("ignoring unreadable categories in the settings file")
                 continue
         default = getattr(s, key)
         if isinstance(default, bool) and not isinstance(value, bool):
+            log.warning("ignoring setting %s: expected true or false, found %r", key, value)
             continue
         if isinstance(default, (int, float)) and not isinstance(default, bool):
             if not isinstance(value, (int, float)) or isinstance(value, bool):
+                log.warning("ignoring setting %s: expected a number, found %r", key, value)
                 continue
             value = type(default)(value)
         setattr(s, key, value)
     return s
+
+
+# Settings whose values never go into a log file.
+_PRIVATE = frozenset({"proxy_url"})
+
+
+def _loggable(key: str, value: object) -> str:
+    if key in _PRIVATE:
+        return "<set>" if value else "<empty>"
+    text = repr(value)
+    return text if len(text) <= 300 else text[:300] + f"... <{len(text)} characters>"
+
+
+def differences(old: Settings | dict, new: Settings | dict) -> list[str]:
+    """``key: old -> new`` for every setting that differs, fit for a log."""
+    a = asdict(old) if isinstance(old, Settings) else old
+    b = asdict(new) if isinstance(new, Settings) else new
+    out = []
+    for key in b:
+        if a.get(key) == b[key]:
+            continue
+        before, after = a.get(key), b[key]
+        if isinstance(before, list) and isinstance(after, list) and all(isinstance(x, str) for x in before + after):
+            added = sorted(set(after) - set(before))
+            removed = sorted(set(before) - set(after))
+            out.append(f"{key}: added {added or 'nothing'}, removed {removed or 'nothing'}")
+        else:
+            out.append(f"{key}: {_loggable(key, before)} -> {_loggable(key, after)}")
+    return out
 
 
 def save(settings: Settings) -> None:
@@ -178,3 +221,4 @@ def save(settings: Settings) -> None:
     with _lock:
         tmp.write_text(data, encoding="utf-8")
         os.replace(tmp, path)
+    log.debug("settings saved to %s", path)

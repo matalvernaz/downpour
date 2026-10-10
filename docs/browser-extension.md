@@ -139,8 +139,9 @@ Notes:
   - Alt+Shift+D opens the Downpour panel.
 - The Downpour panel says whether Downpour is running. It has the capture
   checkboxes, including "Capture downloads on" the current site, which you
-  uncheck to leave that site's downloads to the browser, and two buttons:
-  Grab video or audio from this page, and Open Downpour.
+  uncheck to leave that site's downloads to the browser, and three buttons:
+  Grab video or audio from this page, Open Downpour, and Copy the diagnostic
+  log.
 
 When something goes wrong after you chose a context-menu item, the page shows
 a message box starting with "Downpour:", which your screen reader reads.
@@ -157,6 +158,8 @@ a message box starting with "Downpour:", which your screen reader reads.
   - downloads that answer a form you submitted, because Downpour could not
     repeat the form;
   - in Firefox, very small files, which finish before Downpour can take them.
-- The browser helper keeps a short log in
-  `%LOCALAPPDATA%\Downpour\native-host.log`. It records what happened but not
-  addresses or cookies.
+- Logs: in Downpour, Help menu, Open the log folder. `extension.log` says
+  what the extension did with each download and why; `native-host.log` says
+  whether the browser helper ran and reached Downpour. If the helper is broken,
+  the extension's lines cannot reach the folder: press Copy the diagnostic log
+  in the Downpour panel instead. See [logging.md](logging.md).

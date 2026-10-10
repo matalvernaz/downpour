@@ -69,6 +69,13 @@ Safety
 - Uses the Windows proxy settings and certificate store.
 - The download engine uses only Python's standard library.
 
+Troubleshooting
+
+- Detailed logs of every download, request, retry, browser handoff and yt-dlp
+  run, with cookies, passwords and link tokens kept out, plus crash and
+  frozen-window reports. Help menu, Open the log folder. See
+  docs\logging.md.
+
 ## Keyboard
 
 In the download list: Enter opens a finished file or shows the properties of
@@ -100,6 +107,14 @@ running window.
 The build lands in `dist\Downpour`. Nothing under `downpour\core` or
 `downpour\cli` uses third-party packages, and a CI check makes sure neither
 imports wx.
+
+To install or update the build for your account, run
+
+    powershell -ExecutionPolicy Bypass -File tools\install.ps1
+
+It copies the build to `%LOCALAPPDATA%\Programs\Downpour`, adds a Start menu
+shortcut and registers that copy as the browsers' helper
+(`downpour-cli helper install`; `helper status` reports it).
 
 ## Credits
 

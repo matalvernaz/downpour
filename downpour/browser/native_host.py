@@ -15,7 +15,9 @@ executable that checks ``is_native_host_invocation`` at startup and runs
 
 Standard output belongs to the browser and one stray print would corrupt the
 stream, so while the host runs ``sys.stdout`` points at stderr (which
-browsers log) and diagnostics go to a small log file in the data directory.
+browsers log) and diagnostics go to native-host.log in the logs folder. The
+extension's own log arrives as ``log`` messages, which the host writes to
+extension.log itself, without involving the app (see core/logs.py).
 """
 
 from __future__ import annotations
@@ -30,9 +32,9 @@ from multiprocessing import AuthenticationError
 from pathlib import Path
 from typing import BinaryIO, Sequence
 
+from downpour import __version__
 from downpour.browser.ids import FIREFOX_EXTENSION_ID, HOST_NAME
-from downpour.core import ipc
-from downpour.core.paths import data_dir
+from downpour.core import ipc, logs
 
 log = logging.getLogger(__name__)
 
@@ -40,9 +42,8 @@ HEADER = struct.Struct("<I")
 MAX_INCOMING = ipc.MAX_MESSAGE  # the pipe refuses anything larger anyway
 MAX_REPLY = 1024 * 1024  # browsers disconnect a host that sends more
 LOG_NAME = "native-host.log"
-LOG_LIMIT = 256 * 1024
 
-MESSAGE_TYPES = frozenset({"hello", "offer", "add", "media", "show"})
+MESSAGE_TYPES = frozenset({"hello", "offer", "add", "media", "show", "log"})
 
 # "hello" is the popup's status check: answer fast and never start the app.
 HELLO_TIMEOUT = 5.0
@@ -134,7 +135,11 @@ def handle(msg: object) -> dict:
         return _error("a message must be a JSON object")
     kind = msg.get("type")
     if kind not in MESSAGE_TYPES:
+        log.warning("unknown message type %r with keys %s", kind, sorted(msg))
         return _error(f"unknown message type: {kind!r}")
+    if kind == "log":
+        return _extension_log(msg)
+    log.debug("%s: %s", kind, _summary(msg))
     started = time.monotonic()
     try:
         if kind == "hello":
@@ -155,6 +160,51 @@ def handle(msg: object) -> dict:
         reply = _error(str(e) or type(e).__name__)
     log.info("%s: %s (%.1f s)", kind, _outcome(kind, reply), time.monotonic() - started)
     return reply
+
+
+def _extension_log(msg: dict) -> dict:
+    """Write the extension's log entries to extension.log. Never starts the app."""
+    source = "extension " + " ".join(str(msg.get(k, ""))[:40] for k in ("version", "browser") if msg.get(k))
+    lines = logs.extension_lines(msg.get("entries"), source.strip())
+    try:
+        logs.append_extension_log(lines)
+    except OSError as e:
+        log.warning("could not write the extension's log: %r", e)
+        return _error(f"could not write the log: {e}")
+    log.debug("log: wrote %d extension entries", len(lines))
+    return {"ok": True, "written": len(lines)}
+
+
+def _summary(msg: dict) -> str:
+    """The shape of a message, for the detailed log. Like _outcome it leaves
+    out addresses, names and cookie details: the app's own log records the
+    downloads themselves, redacted (see core/logs.py)."""
+
+    def item(entry: object) -> str:
+        if not isinstance(entry, dict):
+            return "not an object"
+        size = entry.get("size")
+        cookies = entry.get("cookies")
+        parts = [f"fields {sorted(entry)}"]
+        if isinstance(size, int) and size >= 0:
+            parts.append(f"{size} bytes")
+        if entry.get("mime"):
+            parts.append(str(entry["mime"])[:80])
+        parts.append(f"{len(cookies) if isinstance(cookies, list) else 0} cookies")
+        if entry.get("incognito"):
+            parts.append("private window")
+        return ", ".join(parts)
+
+    kind = msg.get("type")
+    if kind == "offer":
+        return item(msg.get("download"))
+    if kind == "media":
+        return item(msg.get("page"))
+    if kind == "add":
+        items = msg.get("items") if isinstance(msg.get("items"), list) else []
+        first = f"; first: {item(items[0])}" if items else ""
+        return f"{len(items)} links{' to choose from' if msg.get('pick') else ''}{first}"
+    return "no details"
 
 
 def _hello(msg: dict) -> dict:
@@ -231,26 +281,14 @@ def _caller(argv: Sequence[str]) -> str:
 
 
 def _setup_logging() -> None:
-    """Append to native-host.log, starting afresh once it passes LOG_LIMIT.
-
-    Several hosts may run at once (one per message), so a failed rotation is
-    ignored rather than fought over; the next host will rotate.
-    """
-    handler: logging.Handler
+    """Append to native-host.log in the logs folder. Several hosts may run
+    at once (one per message), so the file is shared and only rotated at
+    start-up."""
     try:
-        path = data_dir() / LOG_NAME
-        try:
-            if path.stat().st_size > LOG_LIMIT:
-                os.replace(path, path.with_name(LOG_NAME + ".1"))
-        except OSError:
-            pass
-        handler = logging.FileHandler(path, encoding="utf-8", delay=True)
+        logs.setup(LOG_NAME, detailed=logs.detailed_setting(), shared=True)
     except OSError:
-        handler = logging.NullHandler()
-    handler.setFormatter(logging.Formatter("%(asctime)s [%(process)d] %(levelname)s %(message)s"))
-    root = logging.getLogger()
-    root.addHandler(handler)
-    root.setLevel(logging.INFO)
+        logging.getLogger().addHandler(logging.NullHandler())
+    logs.install_excepthooks()
 
 
 def _std_stream(stream: object, fd: int, std_handle: int, mode: str) -> BinaryIO:
@@ -291,7 +329,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     real_stdout = sys.stdout
     sys.stdout = sys.stderr if sys.stderr is not None else open(os.devnull, "w", encoding="utf-8")
-    log.info("started by %s", _caller(argv))
+    try:
+        from downpour.core.winutil import parent_process
+
+        parent = parent_process()
+    except Exception:  # noqa: BLE001 - only for the log
+        parent = "an unknown process"
+    log.info(
+        "helper %s (%s) started by %s from %s; %s",
+        __version__, logs.build_id(), _caller(argv), parent, sys.executable,
+    )
     try:
         return serve(reader, writer)
     finally:

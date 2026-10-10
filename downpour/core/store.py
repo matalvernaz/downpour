@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 class Store:
     def __init__(self, path: Path | str):
         self._lock = threading.Lock()
+        log.info("opening the download database %s (SQLite %s)", path, sqlite3.sqlite_version)
         self._db = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
         with self._lock:
             self._db.execute("PRAGMA journal_mode=WAL")
@@ -86,3 +87,4 @@ class Store:
     def close(self) -> None:
         with self._lock:
             self._db.close()
+        log.debug("download database closed")

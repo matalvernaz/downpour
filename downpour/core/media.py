@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 from downpour.core import filenames
+from downpour.core.logs import redact_arg, redact_url, summarize_cookies
 from downpour.core.models import Download, Status
 from downpour.core.paths import data_dir
 
@@ -46,6 +47,7 @@ FFMPEG_ZIP = "ffmpeg-master-latest-win64-gpl-shared.zip"
 FFMPEG_URL = f"https://github.com/yt-dlp/FFmpeg-Builds/releases/latest/download/{FFMPEG_ZIP}"
 FFMPEG_SUMS = "https://github.com/yt-dlp/FFmpeg-Builds/releases/latest/download/checksums.sha256"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+PROGRESS_LOG_SECONDS = 10.0
 
 
 class MediaError(Exception):
@@ -80,6 +82,7 @@ def find_ffmpeg(settings: "Settings | None" = None) -> str | None:
 
 
 def _fetch(url: str, progress: Callable[[int, int | None], None] | None = None, stop: threading.Event | None = None) -> bytes:
+    log.info("fetching %s", url)
     req = urllib.request.Request(url, headers={"User-Agent": "Downpour"})
     with urllib.request.urlopen(req, timeout=60) as resp:
         total = resp.headers.get("Content-Length")
@@ -106,12 +109,15 @@ def install_ytdlp(progress=None, stop=None) -> str:
     """Download the official yt-dlp.exe and verify it. Returns its path."""
     expected = _expected_sum(_fetch(YTDLP_SUMS).decode("utf-8", "replace"), "yt-dlp.exe")
     data = _fetch(YTDLP_URL, progress, stop)
-    if hashlib.sha256(data).hexdigest() != expected:
+    actual = hashlib.sha256(data).hexdigest()
+    if actual != expected:
+        log.error("yt-dlp.exe (%d bytes) has SHA-256 %s but the published sum is %s", len(data), actual, expected)
         raise MediaError("The downloaded yt-dlp did not match its published checksum, so it was discarded.")
     target = tools_dir() / "yt-dlp.exe"
     tmp = target.with_suffix(".tmp")
     tmp.write_bytes(data)
     os.replace(tmp, target)
+    log.info("installed yt-dlp (%d bytes, checksum verified) at %s", len(data), target)
     return str(target)
 
 
@@ -119,7 +125,9 @@ def install_ffmpeg(progress=None, stop=None) -> str:
     """Download yt-dlp's recommended FFmpeg build and verify it."""
     expected = _expected_sum(_fetch(FFMPEG_SUMS).decode("utf-8", "replace"), FFMPEG_ZIP)
     data = _fetch(FFMPEG_URL, progress, stop)
-    if hashlib.sha256(data).hexdigest() != expected:
+    actual = hashlib.sha256(data).hexdigest()
+    if actual != expected:
+        log.error("%s (%d bytes) has SHA-256 %s but the published sum is %s", FFMPEG_ZIP, len(data), actual, expected)
         raise MediaError("The downloaded FFmpeg did not match its published checksum, so it was discarded.")
     target = tools_dir() / "ffmpeg"
     staging = Path(tempfile.mkdtemp(prefix="ffmpeg-", dir=tools_dir()))
@@ -136,14 +144,75 @@ def install_ffmpeg(progress=None, stop=None) -> str:
     if target.exists():
         shutil.rmtree(target, ignore_errors=True)
     os.replace(staging, target)
+    log.info("installed FFmpeg (%d bytes, checksum verified) at %s", len(data), target)
     return str(target / "ffmpeg.exe")
 
 
 def update_ytdlp(path: str) -> str:
     """Run yt-dlp's self-update; returns what it said."""
+    log.info("updating yt-dlp at %s", path)
     proc = subprocess.run([path, "-U"], capture_output=True, text=True, encoding="utf-8", errors="replace",
                           creationflags=NO_WINDOW, timeout=300)
-    return (proc.stdout + proc.stderr).strip()
+    said = (proc.stdout + proc.stderr).strip()
+    log.info("yt-dlp update finished with exit code %s: %s", proc.returncode, " | ".join(said.splitlines()[-6:]))
+    _versions_logged.clear()
+    return said
+
+
+# -- logging what runs ----------------------------------------------------------
+
+_versions_logged: set[str] = set()
+_versions_lock = threading.Lock()
+
+
+def log_tool_versions(settings: "Settings | None") -> None:
+    """Note yt-dlp's and FFmpeg's paths and versions in the log, once per
+    process (again after an update), on a background thread: asking a tool
+    for its version takes a second or two."""
+    ytdlp, ffmpeg = find_ytdlp(settings), find_ffmpeg(settings)
+    key = f"{ytdlp}|{ffmpeg}"
+    with _versions_lock:
+        if key in _versions_logged:
+            return
+        _versions_logged.add(key)
+
+    def ask(path: str | None, args: list[str]) -> str:
+        if not path:
+            return "not found"
+        try:
+            proc = subprocess.run([path, *args], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                  creationflags=NO_WINDOW, timeout=30)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return f"{path} (could not ask its version: {e!r})"
+        first = (proc.stdout or proc.stderr or "").strip().splitlines()
+        return f"{path}, {first[0] if first else 'no version given'}"
+
+    def run():
+        runtimes = [name for name in ("deno", "node", "bun") if shutil.which(name)]
+        log.info("yt-dlp: %s", ask(ytdlp, ["--version"]))
+        log.info("FFmpeg: %s", ask(ffmpeg, ["-hide_banner", "-version"]))
+        log.info("JavaScript runtimes for yt-dlp: %s", ", ".join(runtimes) or "none found")
+
+    threading.Thread(target=run, name="tool-versions", daemon=True).start()
+
+
+def loggable_command(cmd: list[str], cookie_path: str | None = None) -> str:
+    """A yt-dlp command line for the log: the cookie file named but not
+    shown, proxy credentials and addresses redacted."""
+    out = []
+    hide_next = False
+    for arg in cmd:
+        if hide_next:
+            out.append(redact_arg(arg) if arg else '""')
+            hide_next = False
+            continue
+        if cookie_path and arg == cookie_path:
+            out.append("<cookie file>")
+            continue
+        if arg in ("--proxy", "--referer"):
+            hide_next = True
+        out.append(redact_arg(arg))
+    return " ".join(f'"{a}"' if " " in a else a for a in out)
 
 
 # -- asking about a page ----------------------------------------------------------
@@ -298,11 +367,15 @@ def fetch_info(
     ytdlp = find_ytdlp(settings)
     if not ytdlp:
         raise MediaError("yt-dlp is not installed")
+    log_tool_versions(settings)
     cookie_path = _cookie_file(cookies or [])
+    began = time.monotonic()
     try:
         cmd = [ytdlp, "-J", "--flat-playlist" if playlist else "--no-playlist"]
         cmd += _common_args(None, settings, cookie_path, user_agent, referrer)
         cmd.append(url)
+        log.info("asking yt-dlp about %s with %s", redact_url(url), summarize_cookies(cookies))
+        log.debug("running %s", loggable_command(cmd, cookie_path))
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
                                 errors="replace", creationflags=NO_WINDOW, env=_env())
         while True:
@@ -311,15 +384,29 @@ def fetch_info(
                 break
             except subprocess.TimeoutExpired:
                 if stop is not None and stop.is_set():
+                    log.info("cancelled asking yt-dlp about %s", redact_url(url))
                     _kill_tree(proc)
                     raise InterruptedError("cancelled")
     finally:
         if cookie_path:
             _remove(cookie_path)
+    took = time.monotonic() - began
     if proc.returncode != 0 or not out.strip():
+        log.warning(
+            "yt-dlp could not read %s (exit code %s after %.1f s); it said:\n%s",
+            redact_url(url), proc.returncode, took, "\n".join(err.strip().splitlines()[-15:]) or "nothing",
+        )
         raise MediaError(_last_error(err))
+    if err.strip():
+        log.debug("yt-dlp also said: %s", " | ".join(err.strip().splitlines()[-10:]))
     data = json.loads(out)
-    return _parse_info(url, data)
+    info = _parse_info(url, data)
+    log.info(
+        "yt-dlp read %s in %.1f s: %s, %s",
+        redact_url(url), took, info.extractor or "unknown site",
+        f"playlist of {len(info.entries)}" if info.is_playlist else f"{len(info.formats)} formats",
+    )
+    return info
 
 
 def _parse_info(url: str, data: dict) -> MediaInfo:
@@ -379,6 +466,7 @@ def _kill_tree(proc: subprocess.Popen) -> None:
     """Stop yt-dlp and any FFmpeg it started."""
     if proc.poll() is not None:
         return
+    log.debug("stopping yt-dlp (process %s) and anything it started", proc.pid)
     if sys.platform == "win32":
         subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, creationflags=NO_WINDOW)
     else:
@@ -407,6 +495,7 @@ class MediaTask:
         self._stop = threading.Event()
         self._proc: subprocess.Popen | None = None
         self._files: dict[str, tuple[int, int | None]] = {}
+        self._progress_logged = 0.0
         self.thread = threading.Thread(target=self._run, name=f"media-{dl.id}", daemon=True)
 
     def start(self) -> None:
@@ -480,27 +569,45 @@ class MediaTask:
             self.engine._set_status(dl, Status.CONNECTING)
             if self._stop.is_set():
                 raise InterruptedError()
+            log_tool_versions(self.engine.settings)
+            cmd = self._command(ytdlp, cookie_path)
+            log.info(
+                "media download %s: starting %s from %s as %s into %s, %s",
+                dl.id, dl.filename or "(named by yt-dlp)", redact_url(dl.url), dl.media_format or "the default format",
+                dl.directory, summarize_cookies(dl.cookies),
+            )
+            log.debug("media download %s: running %s", dl.id, loggable_command(cmd, cookie_path))
+            began = time.monotonic()
             self._proc = subprocess.Popen(
-                self._command(ytdlp, cookie_path), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW, env=_env(),
             )
             if self._stop.is_set():  # stop() came before _proc was set, so it could not end it
                 _kill_tree(self._proc)
             final_path, tail = self._follow(self._proc)
             code = self._proc.wait()
+            took = time.monotonic() - began
             if self._stop.is_set():
                 outcome = Outcome.STOPPED
+                log.info("media download %s: stopped after %.0f s", dl.id, took)
             elif code == 0:
                 self._complete(final_path)
                 outcome = Outcome.COMPLETED
+                log.info("media download %s: completed %s (%s bytes) in %.0f s", dl.id, final_path or "?", dl.size, took)
             else:
                 error = _last_error("\n".join(tail))
+                log.warning(
+                    "media download %s: yt-dlp failed with exit code %s after %.0f s; its last lines:\n%s",
+                    dl.id, code, took, "\n".join(tail[-20:]) or "nothing",
+                )
         except InterruptedError:
             outcome = Outcome.STOPPED
         except MediaError as e:
             error = str(e)
+            log.warning("media download %s: %s", dl.id, e)
         except OSError as e:
             error = f"Could not run yt-dlp: {e}"
+            log.warning("media download %s: could not run yt-dlp", dl.id, exc_info=True)
         except Exception as e:  # noqa: BLE001
             log.exception("media download %s crashed", dl.id)
             error = f"Unexpected error: {e}"
@@ -521,11 +628,17 @@ class MediaTask:
                 self._progress(line[7:])
             elif line.startswith("DPFILE "):
                 final_path = line[7:].strip()
+                log.debug("media download %s: saved as %s", dl.id, final_path)
             elif line.startswith("DPPOST started"):
+                log.debug("media download %s: %s", dl.id, line[7:])
                 # Joining streams or converting, which can take a while.
                 if dl.status != Status.FINISHING:
                     self.engine._set_status(dl, Status.FINISHING)
-            elif not line.startswith("DPPOST "):
+            elif line.startswith("DPPOST "):
+                log.debug("media download %s: %s", dl.id, line[7:])
+            else:
+                if line.strip():
+                    log.debug("media download %s: yt-dlp: %s", dl.id, line)
                 tail = (tail + [line])[-40:]
         return final_path, tail
 
@@ -547,6 +660,13 @@ class MediaTask:
         dl.speed = float(p.get("speed") or 0.0)
         dl.eta = float(p["eta"]) if p.get("eta") is not None else None
         dl.active_connections = 1
+        now = time.monotonic()
+        if now - self._progress_logged >= PROGRESS_LOG_SECONDS:
+            self._progress_logged = now
+            log.debug(
+                "media download %s: %s of %s bytes at %.0f bytes/s (%s)", dl.id, dl.downloaded,
+                dl.size if dl.size is not None else "unknown", dl.speed, os.path.basename(name) or "?",
+            )
         if dl.status != Status.DOWNLOADING and p.get("status") == "downloading":
             self.engine._set_status(dl, Status.DOWNLOADING)
 

@@ -25,6 +25,7 @@ a = Analysis(
         "downpour.browser.native_host",
         "downpour.browser.install",
         "downpour.core.media",
+        "downpour._buildinfo",
     ],
     excludes=[
         "pytest",

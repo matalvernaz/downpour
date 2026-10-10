@@ -63,3 +63,10 @@ take. Reply: `{"ok": true}`.
 Reply: `{"ok": true}`.
 
 `show` - bring the Downpour window to the front. Reply: `{"ok": true}`.
+
+`log` - lines from the extension's own log, which the host appends to
+`logs/extension.log` itself. Never starts the app.
+`{"type": "log", "version": "0.1.0", "browser": "Chrome 141", "entries": [{"t": "2026-10-10T07:42:01.123Z", "level": "info", "msg": "..."}]}`.
+`level` is `debug`, `info`, `warn` or `error`; at most 500 entries of 2000
+characters each are kept. Reply: `{"ok": true, "written": 1}`. See
+[logging.md](logging.md).

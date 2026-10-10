@@ -107,6 +107,21 @@ byId("grab").addEventListener("click", async () => {
   }
 });
 
+// The extension's latest log lines, for when the browser helper cannot
+// deliver them to Downpour's extension.log.
+byId("copyLog").addEventListener("click", async () => {
+  try {
+    const { diagnostics } = await api.storage.local.get({ diagnostics: [] });
+    const manifest = api.runtime.getManifest();
+    const lines = diagnostics.map((e) => `${e.t} ${String(e.level).toUpperCase()} ${e.msg}`);
+    const header = `Downpour extension ${manifest.version}, ${navigator.userAgent}`;
+    await navigator.clipboard.writeText([header, ...lines].join("\n") + "\n");
+    say(lines.length ? `Copied ${lines.length} lines of the diagnostic log.` : "The diagnostic log is empty; copied the version line.");
+  } catch (error) {
+    say(`Could not copy the diagnostic log: ${error.message}`);
+  }
+});
+
 byId("open").addEventListener("click", async () => {
   say("Opening Downpour.");
   try {

@@ -48,6 +48,118 @@ class HostError extends Error {
 class Problem extends Error {}
 
 // ---------------------------------------------------------------------------
+// Diagnostics. What the extension saw and decided is sent to Downpour's
+// extension.log through the browser helper a few seconds after it happens,
+// and the latest lines stay in storage.local, so the popup's "Copy the
+// diagnostic log" works even when the helper does not. Addresses are
+// redacted the way Downpour's own logs are; cookies are only ever counted.
+
+const VERSION = api.runtime.getManifest().version;
+const BROWSER = (() => {
+  const match = navigator.userAgent.match(/(Firefox|Edg|OPR|Vivaldi|Chrome)\/([\d.]+)/);
+  if (!match) return "unknown browser";
+  const names = { Edg: "Edge", OPR: "Opera" };
+  return `${names[match[1]] || match[1]} ${match[2]}`;
+})();
+const LOG_KEEP = 300; // lines kept in storage for the popup
+const LOG_FLUSH_MS = 3000; // gather lines this long, then send them together
+const LOG_SEND_MAX = 200; // lines per message to the helper
+const LOG_RETRY_MS = 60000;
+const SECRET_WORDS = ["token", "sig", "secret", "pass", "pwd", "auth", "key", "session", "cred", "policy", "ticket"];
+const SECRET_NAMES = new Set(["code", "sid", "hash", "otp", "jwt"]);
+const TOKENISH = /^(?=.*\d)(?=.*[A-Za-z])[A-Za-z0-9_\-+/=.:%~]{24,}$/; // tokens and IDs, whatever their name
+
+let logPending = [];
+let logTimer = null;
+let logSaving = Promise.resolve();
+
+// An address fit for a log: no user name or password, no fragment, and no
+// values of query parameters that look like tokens or signatures.
+function redactUrl(url) {
+  if (!url) return "";
+  try {
+    const parsed = new URL(url);
+    const params = [];
+    for (const [name, value] of parsed.searchParams) {
+      const lower = name.toLowerCase();
+      let shown = value;
+      if (SECRET_NAMES.has(lower) || SECRET_WORDS.some((word) => lower.includes(word))) shown = "<hidden>";
+      else if (value.length > 80 || TOKENISH.test(value)) shown = `<${value.length} characters>`;
+      params.push(`${name}=${shown}`);
+    }
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}${params.length ? `?${params.join("&")}` : ""}`;
+  } catch {
+    return "<unreadable address>";
+  }
+}
+
+function keepLine(entry) {
+  logSaving = logSaving
+    .then(async () => {
+      const { diagnostics } = await api.storage.local.get({ diagnostics: [] });
+      diagnostics.push(entry);
+      await api.storage.local.set({ diagnostics: diagnostics.slice(-LOG_KEEP) });
+    })
+    .catch(() => {});
+}
+
+function writeLog(level, message) {
+  const entry = { t: new Date().toISOString(), level, msg: String(message) };
+  const print = level === "error" ? console.error : level === "warn" ? console.warn : console.log;
+  print(`Downpour: ${entry.msg}`);
+  logPending.push(entry);
+  if (logPending.length > LOG_KEEP) logPending.splice(0, logPending.length - LOG_KEEP);
+  keepLine(entry);
+  // Detail lines wait for the next real event: the script restarts often
+  // (every page load can wake it), and each send starts the helper program.
+  if (level !== "debug" && !logTimer) logTimer = setTimeout(flushLog, LOG_FLUSH_MS);
+}
+
+const diag = {
+  debug: (message) => writeLog("debug", message),
+  info: (message) => writeLog("info", message),
+  warn: (message) => writeLog("warn", message),
+  error: (message) => writeLog("error", message),
+};
+
+function errorText(error) {
+  if (error instanceof HostError) return `${error.kind}: ${error.message}`;
+  return String((error && error.message) || error || "unknown error");
+}
+
+// Sends the gathered lines to the helper. Never logs through diag itself,
+// or every failure would schedule another failing send.
+async function flushLog() {
+  logTimer = null;
+  if (!logPending.length) return;
+  if (Date.now() < hostMissingUntil) {
+    logTimer = setTimeout(flushLog, LOG_RETRY_MS);
+    return;
+  }
+  const batch = logPending.splice(0, LOG_SEND_MAX);
+  let reply;
+  try {
+    reply = await sendToHost({ type: "log", version: VERSION, browser: BROWSER, entries: batch }, HELLO_TIMEOUT_MS);
+  } catch (error) {
+    console.warn("Downpour: could not send the diagnostic log", error);
+    logPending = batch.concat(logPending).slice(-LOG_KEEP);
+    clearTimeout(logTimer); // lines logged meanwhile may have scheduled a sooner try
+    logTimer = setTimeout(flushLog, LOG_RETRY_MS);
+    return;
+  }
+  if (!reply.ok) console.warn("Downpour: the browser helper did not take the diagnostic log:", reply.error);
+  if (logPending.length && !logTimer) logTimer = setTimeout(flushLog, LOG_FLUSH_MS);
+}
+
+function describeItem(item) {
+  const size = item.totalBytes > 0 ? `${item.totalBytes} bytes` : "size unknown";
+  const name = baseName(item.filename) || "no name yet";
+  return `download ${item.id} ${redactUrl(item.finalUrl || item.url)} (${name}, ${item.mime || "no type"}, ${size}${
+    item.incognito ? ", private window" : ""
+  })`;
+}
+
+// ---------------------------------------------------------------------------
 // Small helpers
 
 function isWebUrl(url) {
@@ -163,12 +275,17 @@ function noteHostWorking() {
   hostMissingUntil = 0;
   api.storage.session
     .get("problem")
-    .then(({ problem }) => (problem ? setProblem("") : undefined))
+    .then(({ problem }) => {
+      if (!problem) return undefined;
+      diag.info("the browser helper works again");
+      return setProblem("");
+    })
     .catch(() => {});
 }
 
 function noteHostProblem(error) {
   const e = classifyError(error);
+  diag.warn(`talking to the browser helper failed: ${errorText(e)}`);
   if (e.kind === "missing" || e.kind === "broken") {
     hostMissingUntil = Date.now() + MISSING_HOST_BACKOFF_MS;
     setProblem(problemText(e)).catch(() => {});
@@ -177,6 +294,7 @@ function noteHostProblem(error) {
 
 // For things the user asked for: add, media, show.
 async function request(message) {
+  const started = Date.now();
   let reply;
   try {
     reply = await sendToHost(message, ACTION_TIMEOUT_MS);
@@ -185,7 +303,12 @@ async function request(message) {
     throw error;
   }
   noteHostWorking();
-  if (!reply.ok) throw new HostError(reply.error || "Downpour turned the request down.", "refused");
+  const took = `${((Date.now() - started) / 1000).toFixed(1)} s`;
+  if (!reply.ok) {
+    diag.warn(`Downpour turned down the ${message.type} request after ${took}: ${reply.error || "no reason given"}`);
+    throw new HostError(reply.error || "Downpour turned the request down.", "refused");
+  }
+  diag.info(`Downpour took the ${message.type} request in ${took}`);
   return reply;
 }
 
@@ -211,6 +334,7 @@ async function helloStatus() {
 // Toolbar button: its name says whether capture is on, or what is wrong.
 
 async function setProblem(text) {
+  if (text) diag.info(`toolbar button now says: ${text}`);
   await api.storage.session.set({ problem: text });
   await refreshToolbar();
 }
@@ -227,6 +351,7 @@ async function refreshToolbar() {
 // A failure of something the user just asked for. A page alert is spoken by
 // screen readers straight away; pages that refuse scripts get the badge.
 function tellUser(tabId, message) {
+  diag.warn(`told the user: ${message}`);
   const text = `Downpour: ${message}`;
   if (typeof tabId === "number" && tabId >= 0) {
     api.scripting
@@ -364,8 +489,9 @@ async function tryPause(id) {
 async function resumeQuietly(id) {
   try {
     await api.downloads.resume(id);
+    diag.debug(`download ${id}: resumed in the browser`);
   } catch (error) {
-    console.warn("Downpour: could not resume download", id, error);
+    diag.warn(`download ${id}: could not resume it in the browser: ${errorText(error)}`);
   }
 }
 
@@ -379,7 +505,10 @@ async function releaseOrphans() {
     if (held.has(id)) continue;
     await api.storage.session.remove(key);
     const item = await findDownload(id);
-    if (item && item.paused) await resumeQuietly(id);
+    if (item && item.paused) {
+      diag.info(`download ${id}: was left paused by an earlier copy of this script; resuming it`);
+      await resumeQuietly(id);
+    }
   }
 }
 
@@ -421,14 +550,16 @@ function onIgnoredSite(settings, urls) {
   });
 }
 
-async function wantsCapture(item) {
+// Why the extension leaves a download alone, or "" when it should offer it.
+async function captureRefusal(item) {
   const settings = await getSettings();
-  if (!settings.capture) return false;
-  if (item.incognito && !settings.capturePrivate) return false;
-  if (onIgnoredSite(settings, [item.url, item.finalUrl, item.referrer])) return false;
+  if (!settings.capture) return "capturing is switched off in the panel";
+  if (item.incognito && !settings.capturePrivate) return "it is in a private window";
+  if (onIgnoredSite(settings, [item.url, item.finalUrl, item.referrer])) return "capturing is off for this site";
   // Without access to the site there are no cookies and no view of form
   // submissions, so Downpour could fetch the wrong thing.
-  return hasSiteAccess([item.url, item.finalUrl]);
+  if (!(await hasSiteAccess([item.url, item.finalUrl]))) return "the extension may not read this site";
+  return "";
 }
 
 async function sourceTab(incognito) {
@@ -460,12 +591,20 @@ async function describeDownload(item) {
 }
 
 async function offer(item) {
+  const started = Date.now();
   try {
-    const reply = await sendToHost({ type: "offer", download: await describeDownload(item) }, OFFER_TIMEOUT_MS);
+    const download = await describeDownload(item);
+    diag.debug(`download ${item.id}: offering it with ${(download.cookies || []).length} cookies`);
+    const reply = await sendToHost({ type: "offer", download }, OFFER_TIMEOUT_MS);
     noteHostWorking();
-    return reply.ok === true && reply.accept === true;
+    const accepted = reply.ok === true && reply.accept === true;
+    const took = `${((Date.now() - started) / 1000).toFixed(1)} s`;
+    if (reply.ok !== true) diag.warn(`download ${item.id}: Downpour failed the offer after ${took}: ${reply.error || "no reason given"}`);
+    else diag.info(`download ${item.id}: Downpour ${accepted ? "took it" : "left it to the browser"} (answered in ${took})`);
+    return accepted;
   } catch (error) {
     noteHostProblem(error);
+    diag.warn(`download ${item.id}: no answer to the offer, so the browser keeps it: ${errorText(error)}`);
     return false;
   }
 }
@@ -479,8 +618,12 @@ async function takeOver(id) {
     // finished or gone meanwhile; the search below tells which
   }
   const item = await findDownload(id);
-  if (item && (item.paused || item.state === "in_progress")) return false;
+  if (item && (item.paused || item.state === "in_progress")) {
+    diag.warn(`download ${id}: the browser's copy is still alive after cancelling, so it keeps it`);
+    return false;
+  }
   if (item && item.state === "interrupted") await api.downloads.erase({ id }).catch(() => {});
+  diag.debug(`download ${id}: the browser's copy is cancelled`);
   return true;
 }
 
@@ -507,15 +650,26 @@ async function offerDownload(item, release) {
   let tookOver = false;
   held.add(item.id);
   try {
-    if (!(await wantsCapture(item))) return;
+    const refusal = await captureRefusal(item);
+    if (refusal) {
+      diag.info(`${describeItem(item)}: left to the browser because ${refusal}`);
+      return;
+    }
+    diag.info(`${describeItem(item)}: offering it to Downpour`);
     let current = item;
     if (!holding) {
       current = await waitForFirstByte(item.id);
-      if (!current) return; // finished, failed or stalled: the browser keeps it
+      if (!current) {
+        diag.info(`download ${item.id}: finished, failed or sent nothing within ${FIRST_BYTE_WAIT_MS / 1000} s, so the browser keeps it`);
+        return;
+      }
     }
     await markHeld(item.id);
     paused = await tryPause(item.id);
-    if (!paused && !holding) return; // it finished meanwhile, so Firefox keeps it
+    if (!paused && !holding) {
+      diag.info(`download ${item.id}: finished before it could be paused, so the browser keeps it`);
+      return;
+    }
     if (await offer(current)) tookOver = await takeOver(item.id);
   } finally {
     if (paused && !tookOver) await resumeQuietly(item.id);
@@ -527,7 +681,11 @@ async function offerDownload(item, release) {
 
 if (CAN_HOLD) {
   api.downloads.onDeterminingFilename.addListener((item, suggest) => {
-    if (skipReason(item)) return undefined; // the browser calls suggest() itself
+    const skip = skipReason(item);
+    if (skip) {
+      diag.debug(`${describeItem(item)}: not offered, ${skip}`);
+      return undefined; // the browser calls suggest() itself
+    }
     let released = false;
     const release = () => {
       if (released) return;
@@ -535,19 +693,23 @@ if (CAN_HOLD) {
       try {
         suggest(); // no arguments: keep the browser's own name and location
       } catch (error) {
-        console.warn("Downpour: could not release download", item.id, error);
+        diag.warn(`download ${item.id}: could not hand it back to the browser: ${errorText(error)}`);
       }
     };
     offerDownload(item, release).catch((error) => {
-      console.error("Downpour: offering a download failed", error);
+      diag.error(`download ${item.id}: offering it failed: ${errorText(error)}`);
       release();
     });
     return true; // suggest() will be called asynchronously
   });
 } else {
   api.downloads.onCreated.addListener((item) => {
-    if (skipReason(item)) return;
-    offerDownload(item, null).catch((error) => console.error("Downpour: offering a download failed", error));
+    const skip = skipReason(item);
+    if (skip) {
+      diag.debug(`${describeItem(item)}: not offered, ${skip}`);
+      return;
+    }
+    offerDownload(item, null).catch((error) => diag.error(`download ${item.id}: offering it failed: ${errorText(error)}`));
   });
 }
 
@@ -669,6 +831,7 @@ async function sendLinks(links, page, pick) {
       })
     );
   }
+  diag.info(`sending ${items.length} links from ${redactUrl(page.url)} to Downpour${pick ? " to choose from" : ""}`);
   await request({ type: "add", items, pick });
 }
 
@@ -683,6 +846,7 @@ async function grabMedia(page) {
     userAgent: navigator.userAgent,
     incognito: page.incognito,
   });
+  diag.info(`asking Downpour to grab video or audio from ${redactUrl(page.url)}`);
   await request({ type: "media", page: item });
 }
 
@@ -713,6 +877,7 @@ async function handleMenu(info, tab) {
 }
 
 api.contextMenus.onClicked.addListener((info, tab) => {
+  diag.info(`menu command ${info.menuItemId} on ${redactUrl((tab && tab.url) || info.pageUrl)}`);
   handleMenu(info, tab).catch((error) => tellUser(tab && tab.id, problemText(error)));
 });
 
@@ -769,6 +934,7 @@ async function handleCommand(command, tab) {
 }
 
 api.commands.onCommand.addListener((command, tab) => {
+  diag.info(`keyboard command ${command} on ${redactUrl(tab && tab.url) || "the current tab"}`);
   handleCommand(command, tab).catch((error) => tellUser(tab && tab.id, problemText(error)));
 });
 
@@ -776,6 +942,7 @@ api.commands.onCommand.addListener((command, tab) => {
 // The popup
 
 async function popupCommand(message) {
+  diag.debug(`panel command: ${message.cmd}`);
   switch (message.cmd) {
     case "status":
       await setProblem(""); // the popup now says what is wrong, so clear the badge
@@ -802,15 +969,22 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // ---------------------------------------------------------------------------
 // Start-up
 
-api.runtime.onInstalled.addListener(() => {
-  createMenus().catch((error) => console.error("Downpour: could not create menus", error));
+api.runtime.onInstalled.addListener((details) => {
+  diag.info(
+    `installed (${details.reason}${details.previousVersion ? ` from ${details.previousVersion}` : ""}): version ${VERSION} on ${BROWSER}`
+  );
+  createMenus().catch((error) => diag.error(`could not create the menus: ${errorText(error)}`));
 });
 api.runtime.onStartup.addListener(() => {
-  createMenus().catch((error) => console.error("Downpour: could not create menus", error));
+  diag.info(`browser started: version ${VERSION} on ${BROWSER}`);
+  createMenus().catch((error) => diag.error(`could not create the menus: ${errorText(error)}`));
 });
 api.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && "capture" in changes) refreshToolbar().catch(() => {});
 });
 
+diag.debug(
+  `background script started (version ${VERSION} on ${BROWSER}; ${CAN_HOLD ? "holds downloads before they start" : "pauses downloads after they start"})`
+);
 refreshToolbar().catch(() => {});
-releaseOrphans().catch((error) => console.warn("Downpour: could not check paused downloads", error));
+releaseOrphans().catch((error) => diag.warn(`could not check for paused downloads: ${errorText(error)}`));

@@ -7,9 +7,13 @@ controls that need it, an explicit accessible name as well - see a11y.py.
 
 from __future__ import annotations
 
+import logging
+
 import wx
 
 from downpour.gui.a11y import set_accessible_name
+
+log = logging.getLogger(__name__)
 
 
 def plain(label: str) -> str:
@@ -100,8 +104,17 @@ def buttons(parent: wx.Window, sizer: wx.Sizer, specs: list[tuple[int, str]], de
 
 
 def message(parent: wx.Window | None, text_: str, title: str = "Downpour", icon: int = wx.ICON_INFORMATION) -> None:
+    # Every problem the user was told about belongs in the log too.
+    if icon & wx.ICON_ERROR:
+        log.error("told the user (%s): %s", title, text_)
+    elif icon & wx.ICON_WARNING:
+        log.warning("told the user (%s): %s", title, text_)
+    else:
+        log.debug("told the user (%s): %s", title, text_)
     wx.MessageBox(text_, title, wx.OK | icon, parent)
 
 
 def confirm(parent: wx.Window | None, text_: str, title: str = "Downpour") -> bool:
-    return wx.MessageBox(text_, title, wx.YES_NO | wx.NO_DEFAULT | wx.ICON_QUESTION, parent) == wx.YES
+    answer = wx.MessageBox(text_, title, wx.YES_NO | wx.NO_DEFAULT | wx.ICON_QUESTION, parent) == wx.YES
+    log.info("asked the user (%s): %s -> %s", title, text_, "yes" if answer else "no")
+    return answer

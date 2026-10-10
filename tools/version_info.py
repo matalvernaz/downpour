@@ -1,11 +1,14 @@
-"""Write build/version_info.txt, the Windows version resource for the exes.
+"""Write build/version_info.txt, the Windows version resource for the exes,
+and downpour/_buildinfo.py, which names the commit in every log.
 
     py tools/version_info.py
 """
 
 from __future__ import annotations
 
+import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -37,6 +40,21 @@ def main() -> None:
     out.parent.mkdir(exist_ok=True)
     out.write_text(TEMPLATE.format(t=tuple(parts), v=__version__), encoding="utf-8")
     print(f"Wrote {out}")
+    stamp = ROOT / "downpour" / "_buildinfo.py"
+    stamp.write_text(f'"""Written by tools/version_info.py; not in git."""\n\nBUILD = {build_id()!r}\n', encoding="utf-8")
+    print(f"Wrote {stamp}")
+
+
+def build_id() -> str:
+    """The commit and date of this build, which every log's first line repeats."""
+    try:
+        commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True,
+                                text=True, check=True).stdout.strip()
+        changed = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT,
+                                 capture_output=True, text=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        commit, changed = "unknown", ""
+    return f"build {commit}{'+changes' if changed else ''} {date.today().isoformat()}"
 
 
 if __name__ == "__main__":

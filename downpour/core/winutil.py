@@ -8,6 +8,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 
 log = logging.getLogger(__name__)
 
@@ -103,7 +104,45 @@ def unseal(text: str) -> bytes:
     return raw
 
 
+def parent_process() -> str:
+    """Name and ID of the process that started this one, such as
+    "chrome.exe (1234)": which browser called the helper, for its log."""
+    if not WINDOWS:
+        return f"process {os.getppid()}"
+    from ctypes import wintypes
+
+    class Entry(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD),
+            ("szExeFile", ctypes.c_wchar * 260),
+        ]
+
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(Entry)]
+    kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(Entry)]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    parent = os.getppid()
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+    if not snapshot or snapshot == wintypes.HANDLE(-1).value:
+        return f"process {parent}"
+    try:
+        entry = Entry()
+        entry.dwSize = ctypes.sizeof(Entry)
+        found = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+        while found:
+            if entry.th32ProcessID == parent:
+                return f"{entry.szExeFile} ({parent})"
+            found = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snapshot)
+    return f"process {parent}"
+
+
 def open_path(path: str) -> None:
+    log.debug("opening %s", path)
     if WINDOWS:
         os.startfile(path)  # noqa: S606 - opening the user's own file is the point
     else:
@@ -132,7 +171,9 @@ def scan_with_defender(path: str) -> tuple[bool, str]:
             candidates.insert(0, os.path.join(platform_dir, version, "MpCmdRun.exe"))
     exe = next((c for c in candidates if os.path.exists(c)), None)
     if exe is None:
+        log.info("Defender scan skipped: MpCmdRun.exe was not found")
         return True, "Microsoft Defender is not available"
+    began = time.monotonic()
     try:
         proc = subprocess.run(
             [exe, "-Scan", "-ScanType", "3", "-File", path, "-DisableRemediation"],
@@ -142,7 +183,10 @@ def scan_with_defender(path: str) -> tuple[bool, str]:
             timeout=SCAN_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
+        log.warning("Defender scan of %s stopped after %d seconds", path, SCAN_TIMEOUT)
         return True, "The scan took too long and was stopped"
+    log.info("Defender scanned %s in %.1f s: exit code %s", path, time.monotonic() - began, proc.returncode)
+    log.debug("Defender said: %s", " | ".join((proc.stdout or "").strip().splitlines()[-8:]))
     if proc.returncode == 0:
         return True, "No threats found"
     if proc.returncode == 2:
@@ -161,17 +205,33 @@ def set_start_with_windows(enabled: bool, command: str) -> None:
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
         if enabled:
             winreg.SetValueEx(key, "Downpour", 0, winreg.REG_SZ, command)
+            log.debug("start with Windows: %s", command)
         else:
             try:
                 winreg.DeleteValue(key, "Downpour")
+                log.info("start with Windows turned off")
             except FileNotFoundError:
                 pass
+
+
+def start_with_windows_command() -> str:
+    """What the Run key starts at sign-in, or "" when nothing is set."""
+    if not WINDOWS:
+        return ""
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
+            return str(winreg.QueryValueEx(key, "Downpour")[0])
+    except OSError:
+        return ""
 
 
 def power_action(action: str) -> None:
     """Sleep, hibernate or shut down the computer."""
     if not WINDOWS:
         return
+    log.info("all downloads finished; power action: %s", action)
     if action == "shutdown":
         subprocess.Popen(["shutdown", "/s", "/t", "0"])
     elif action in ("sleep", "hibernate"):

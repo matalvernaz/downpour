@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import http.client
 import http.cookiejar
+import logging
 import re
 import socket
 import ssl
@@ -19,7 +20,10 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from downpour.core import filenames
+from downpour.core.logs import redact_url
 from downpour.core.settings import DEFAULT_USER_AGENT
+
+log = logging.getLogger(__name__)
 
 # Failures worth retrying: the network or the server may recover.
 NETWORK_ERRORS = (OSError, http.client.HTTPException, urllib.error.URLError)
@@ -27,6 +31,12 @@ TRANSIENT_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 
 
 _CONTENT_RANGE = re.compile(r"bytes\s+(\d+)-(\d+)/(\d+|\*)", re.I)
 _UNSATISFIED_RANGE = re.compile(r"bytes\s+\*/(\d+)", re.I)
+
+# Response headers worth seeing in a detailed log; none of them is secret.
+LOGGED_HEADERS = (
+    "Content-Length", "Content-Range", "Accept-Ranges", "Content-Type", "Content-Disposition",
+    "Content-Encoding", "ETag", "Last-Modified", "Server", "Retry-After", "cf-mitigated",
+)
 
 _ssl_context: ssl.SSLContext | None = None
 
@@ -111,6 +121,41 @@ def make_cookie(raw: dict) -> http.cookiejar.Cookie:
     )
 
 
+class _LoggingRedirects(urllib.request.HTTPRedirectHandler):
+    """Follows redirects as usual and notes each hop in the detailed log:
+    a link that lands on a login page or an error page shows up there."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        log.debug("redirect %s from %s to %s", code, redact_url(req.full_url), redact_url(newurl))
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _headers_summary(headers) -> str:
+    if not headers:
+        return "no headers"
+    found = [f"{name}: {headers.get(name)}" for name in LOGGED_HEADERS if headers.get(name) is not None]
+    return "; ".join(found) or "none of the usual headers"
+
+
+def _cookie_count(opener: urllib.request.OpenerDirector) -> int:
+    for handler in getattr(opener, "handlers", []):
+        if isinstance(handler, urllib.request.HTTPCookieProcessor):
+            return len(handler.cookiejar)
+    return 0
+
+
+def _error_text(error: urllib.error.HTTPError) -> str:
+    """The start of an error page as plain text. Servers often explain the
+    refusal there ("Request has expired", "AccessDenied"), so it belongs in
+    the detailed log."""
+    try:
+        body = error.read1(2048)  # what has arrived; never wait out a slow error page
+    except Exception:  # noqa: BLE001 - the explanation is a bonus, never a requirement
+        return ""
+    text = re.sub(r"<[^>]*>", " ", body.decode("utf-8", "replace"))
+    return re.sub(r"\s+", " ", text).strip()[:300]
+
+
 def build_opener(
     *,
     url: str,
@@ -140,6 +185,7 @@ def build_opener(
             continue
     handlers.append(urllib.request.HTTPCookieProcessor(jar))
     handlers.append(urllib.request.HTTPSHandler(context=ssl_context()))
+    handlers.append(_LoggingRedirects())
     if username:
         manager = urllib.request.HTTPPasswordMgrWithDefaultRealm()
         manager.add_password(None, url, username, password)
@@ -244,6 +290,17 @@ def open_range(
         if key.lower() not in ("range", "if-range", "accept-encoding", "host", "content-length"):
             hdrs[key] = value
     req = urllib.request.Request(url, headers=hdrs, method="GET")
+    if log.isEnabledFor(logging.DEBUG):
+        extra = [name for name in (headers or {}) if name.lower() not in ("user-agent", "referer")]
+        log.debug(
+            "GET %s%s%s, %d cookies in the jar%s%s",
+            redact_url(url),
+            f", Range: {hdrs['Range']}" if "Range" in hdrs else ", whole file",
+            ", with If-Range" if "If-Range" in hdrs else "",
+            _cookie_count(opener),
+            f", referrer {redact_url(referrer)}" if referrer else "",
+            f", extra headers {extra}" if extra else "",
+        )
     try:
         resp = opener.open(req, timeout=timeout)
     except urllib.error.HTTPError as e:
@@ -257,9 +314,19 @@ def open_range(
             or (e.code in (403, 429, 503) and "cloudflare" in (headers.get("Server") or "").lower()
                 and "text/html" in (headers.get("Content-Type") or ""))
         )
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug(
+                "HTTP %s %s from %s%s; %s; page says: %s",
+                e.code, e.reason or "", redact_url(e.geturl() or url),
+                " (bot check)" if challenge else "", _headers_summary(headers), _error_text(e) or "nothing",
+            )
         e.close()
         raise HttpError(e.code, e.reason or "", url, total, challenge) from None
-    return resp, response_info(resp)
+    info = response_info(resp)
+    if log.isEnabledFor(logging.DEBUG):
+        moved = f" (now {redact_url(info.url)})" if info.url != url else ""
+        log.debug("HTTP %s from %s%s; %s", info.status, redact_url(url), moved, _headers_summary(resp.headers))
+    return resp, info
 
 
 def resume_validator(etag: str, last_modified: str) -> str:
@@ -327,6 +394,11 @@ def probe(
         resp, info = open_range(opener, url, start=None, **kwargs)  # an empty file
     resp.close()
     size = info.total if info.ranged else info.length
+    log.info(
+        "probed %s: %s, %s bytes, %s, %s",
+        redact_url(url), pick_name(info, url), size if size is not None else "unknown",
+        info.mime or "no type", "resumable" if size is not None and (info.ranged or info.accept_ranges) else "not resumable",
+    )
     return Probe(
         filename=pick_name(info, url),
         size=size,

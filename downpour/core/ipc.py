@@ -46,6 +46,7 @@ def load_key(create: bool = False) -> bytes | None:
         try:
             with open(path, "xb") as f:
                 f.write(secrets.token_bytes(32))
+            log.info("created a new pipe key at %s", path)
         except FileExistsError:
             pass
     # A racing creator may not have finished writing yet.
@@ -81,7 +82,9 @@ class Server:
         try:
             self._listener = Listener(address(key), family="AF_PIPE", authkey=key)
         except PermissionError as e:
+            log.info("another copy of Downpour already owns the pipe")
             raise AlreadyRunning() from e
+        log.info("listening for the browser helper and the command line on %s", address(key)[:30] + "...")
         self._closed = False
         self._thread = threading.Thread(target=self._serve, name="ipc-server", daemon=True)
 
@@ -99,26 +102,40 @@ class Server:
         while not self._closed:
             try:
                 conn = self._listener.accept()
-            except (AuthenticationError, EOFError, OSError):
+            except AuthenticationError:
                 if self._closed:
                     return
+                log.warning("refused a pipe connection that failed the key check (an ipc.key from another account or copy?)")
+                continue
+            except (EOFError, OSError) as e:
+                if self._closed:
+                    return
+                log.debug("a pipe connection failed before its request arrived: %r", e)
                 continue
             threading.Thread(target=self._handle, args=(conn,), name="ipc-conn", daemon=True).start()
 
     def _handle(self, conn) -> None:
+        started = time.monotonic()
+        kind = "?"
         with conn:
             try:
                 msg = json.loads(conn.recv_bytes(MAX_MESSAGE))
                 if not isinstance(msg, dict):
                     raise ValueError("request must be a JSON object")
+                kind = str(msg.get("type"))
                 reply = self._handler(msg)
             except Exception as e:  # noqa: BLE001 - every failure becomes a reply
                 log.exception("IPC request failed")
                 reply = {"ok": False, "error": str(e)}
             try:
                 conn.send_bytes(json.dumps(reply if reply is not None else {"ok": True}).encode())
-            except OSError:
-                pass
+            except OSError as e:
+                log.info("could not send the answer to a %s request: %r", kind, e)
+        ok = reply is None or bool(reply.get("ok", True))
+        log.debug(
+            "pipe request %s answered in %.0f ms: %s", kind, (time.monotonic() - started) * 1000,
+            "ok" if ok else f"failed ({reply.get('error')})",
+        )
 
 
 def allow_foreground() -> None:
@@ -151,6 +168,7 @@ def request(msg: dict, timeout: float = 15.0) -> dict:
     with conn:
         conn.send_bytes(json.dumps(msg).encode())
         if not conn.poll(timeout):
+            log.warning("Downpour did not answer a %s request within %.0f seconds", msg.get("type"), timeout)
             raise TimeoutError("Downpour did not answer")
         reply = json.loads(conn.recv_bytes(MAX_MESSAGE))
     if not isinstance(reply, dict):
@@ -180,9 +198,10 @@ def launch_app(*args: str) -> None:
     env = dict(os.environ)
     if not getattr(sys, "frozen", False):
         env["PYTHONPATH"] = str(app_dir())
-    for flags in (base | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0), base):
+    breakaway = base | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
+    for flags in (breakaway, base):
         try:
-            subprocess.Popen(
+            proc = subprocess.Popen(
                 cmd,
                 creationflags=flags,
                 cwd=str(app_dir()),
@@ -192,10 +211,16 @@ def launch_app(*args: str) -> None:
                 stderr=subprocess.DEVNULL,
                 close_fds=True,
             )
+            log.info(
+                "started Downpour as process %s: %s%s", proc.pid, " ".join(cmd),
+                "" if flags == breakaway else " (could not leave the browser's job, so it may close with the browser)",
+            )
             return
-        except OSError:
+        except OSError as e:
             if flags == base:
+                log.error("could not start Downpour with %s: %r", cmd, e)
                 raise
+            log.info("starting outside the browser's job was refused (%r); trying inside it", e)
 
 
 def request_or_launch(
@@ -208,13 +233,17 @@ def request_or_launch(
     try:
         return request(msg, timeout=timeout)
     except NotRunning:
-        pass
+        log.info("Downpour is not running; starting it for a %s request", msg.get("type"))
     launch_app(*launch_args)
-    deadline = time.monotonic() + wait
+    began = time.monotonic()
+    deadline = began + wait
     while time.monotonic() < deadline:
         time.sleep(0.25)
         try:
-            return request(msg, timeout=timeout)
+            reply = request(msg, timeout=timeout)
         except NotRunning:
             continue
+        log.info("Downpour answered %.1f seconds after starting", time.monotonic() - began)
+        return reply
+    log.warning("Downpour did not start within %.0f seconds", wait)
     raise NotRunning("Downpour did not start in time")

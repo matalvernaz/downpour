@@ -314,7 +314,7 @@ def test_messages_reach_the_running_app_and_back(running_app, isolated_home, arg
         {"ok": True},
     ]
     assert running_app == messages  # relayed unchanged, Unicode and all
-    log = (isolated_home / native_host.LOG_NAME).read_text(encoding="utf-8")
+    log = (isolated_home / "logs" / native_host.LOG_NAME).read_text(encoding="utf-8")
     assert "offer: accepted" in log and "offer: declined" in log
     assert "example.com" not in log and secret not in log  # no browsing data in the log
 

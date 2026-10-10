@@ -6,22 +6,22 @@ from __future__ import annotations
 import collections
 import ctypes
 import logging
-import logging.handlers
 import os
 import sys
 import threading
 import time
-import traceback
+from dataclasses import asdict
 from pathlib import Path
 
 import wx
 
 from downpour import APP_NAME, __version__
-from downpour.core import filenames, ipc, winutil
+from downpour.core import filenames, ipc, logs, winutil
 from downpour.core import settings as settings_mod
 from downpour.core.engine import Engine
+from downpour.core.logs import redact_url, summarize_cookies
 from downpour.core.models import Download, Status
-from downpour.core.paths import app_dir, data_dir
+from downpour.core.paths import app_dir, data_dir, logs_dir
 from downpour.core.store import Store
 from downpour.core.units import format_size, format_speed, parse_size
 from downpour.gui import forms
@@ -73,10 +73,12 @@ def bring_to_front(win: wx.TopLevelWindow) -> None:
 
 
 class Controller:
-    def __init__(self, app: wx.App, settings: settings_mod.Settings, engine: Engine):
+    def __init__(self, app: wx.App, settings: settings_mod.Settings, engine: Engine, debug: bool = False):
         self.app = app
         self.settings = settings
         self.engine = engine
+        self.debug = debug  # --debug or DOWNPOUR_DEBUG: detailed logs whatever the settings say
+        self._applied = asdict(settings)
         self.feedback = Feedback(settings)
         self.icon = make_icon()
         self.frame = MainFrame(self)
@@ -132,14 +134,17 @@ class Controller:
     def handle_request(self, msg: dict) -> dict:
         kind = msg.get("type")
         if kind in ("hello", "ping"):
+            log.debug("request %s: answering with version %s", kind, __version__)
             return {"ok": True, "app": APP_NAME, "version": __version__,
                     "capture": self.settings.browser_capture, "pid": os.getpid()}
         if kind == "show":
+            log.info("request show: bringing the window forward")
             wx.CallAfter(self.show_window)
             return {"ok": True}
         if kind == "offer":
             item = msg.get("download")
             if not isinstance(item, dict) or not str(item.get("url", "")).lower().startswith(("http://", "https://")):
+                log.warning("request offer without a usable address; refused")
                 return {"ok": False, "error": "offer needs a download with an http or https url"}
             accept = self.wants(item)
             if accept:
@@ -148,40 +153,66 @@ class Controller:
         if kind == "add":
             items = [i for i in msg.get("items") or [] if isinstance(i, dict) and i.get("url")]
             if not items:
+                log.warning("request add without links; refused")
                 return {"ok": False, "error": "no links to add"}
+            log.info(
+                "request add: %d links from %s%s", len(items), redact_url(str(items[0].get("pageUrl") or "")) or "no page",
+                ", to choose from" if msg.get("pick") else "",
+            )
             wx.CallAfter(self.add_items, items, bool(msg.get("pick")))
             return {"ok": True}
         if kind == "media":
             page = msg.get("page")
             if not isinstance(page, dict) or not str(page.get("url", "")).lower().startswith(("http://", "https://")):
+                log.warning("request media without a usable page address; refused")
                 return {"ok": False, "error": "media needs a page with an http or https url"}
             cookies = [c for c in page.get("cookies") or [] if isinstance(c, dict)]
+            log.info("request media: grab from %s with %s", redact_url(str(page["url"])), summarize_cookies(cookies))
             wx.CallAfter(self.grab_media, str(page["url"]), cookies, str(page.get("userAgent") or ""),
                          str(page.get("referrer") or ""))
             return {"ok": True}
+        log.warning("unknown request type %r", kind)
         return {"ok": False, "error": f"unknown request type {kind!r}"}
 
     def wants(self, item: dict) -> bool:
-        """Should Downpour take this download from the browser?"""
+        """Should Downpour take this download from the browser? The answer
+        and the reason for it go in the log: "why did it not capture my
+        download?" is the commonest question there is."""
+        accept, reason = self._capture_decision(item)
+        url = str(item.get("finalUrl") or item.get("url") or "")
+        size = item.get("size") if isinstance(item.get("size"), int) and item["size"] >= 0 else None
+        log.info(
+            "browser offered %s (%s, %s, %s) from %s: %s, %s",
+            item.get("filename") or filenames.from_url(url), f"{size} bytes" if size is not None else "size unknown",
+            item.get("mime") or "no type", summarize_cookies(item.get("cookies") if isinstance(item.get("cookies"), list) else None),
+            redact_url(url), "taking it" if accept else "leaving it to the browser", reason,
+        )
+        return accept
+
+    def _capture_decision(self, item: dict) -> tuple[bool, str]:
         s = self.settings
         now = time.time()
         for url in [str(item.get("url") or ""), str(item.get("finalUrl") or "")]:
             if url and self._handed_back.get(url, 0) > now:
-                return False  # the user asked the browser to fetch this one itself
+                return False, "the user sent this one back to the browser"
         if self._awaiting_refresh is not None and self._refresh_match(item_to_download(item)) is not None:
-            return True  # the user is renewing an expired link, whatever the file type
+            return True, "it renews the address of an unfinished download"
         if not s.browser_capture:
-            return False
+            return False, "taking over browser downloads is turned off in Options"
         url = str(item.get("finalUrl") or item.get("url"))
         name = str(item.get("filename") or filenames.from_url(url))
         size = item.get("size") if isinstance(item.get("size"), int) and item["size"] >= 0 else None
         if size is not None and size < s.capture_min_size:
-            return False
+            return False, f"it is smaller than the {s.capture_min_size}-byte minimum"
         if s.wants_capture(name, size):
-            return True
+            return True, f"{os.path.splitext(name)[1] or 'its type'} is in the file types to take over"
         mime = str(item.get("mime") or "").split(";")[0].strip().lower()
         has_known_ext = bool(os.path.splitext(name)[1])
-        return not has_known_ext and (mime.startswith(CAPTURE_MIME_PREFIXES) or mime in CAPTURE_MIMES)
+        if not has_known_ext and (mime.startswith(CAPTURE_MIME_PREFIXES) or mime in CAPTURE_MIMES):
+            return True, f"it has no file extension and its type {mime} is a download type"
+        ext = os.path.splitext(name)[1]
+        return False, (f"{ext} is not in the file types to take over" if ext
+                       else f"it has no file extension and its type {mime or '(none)'} is not a download type")
 
     # -- windows ----------------------------------------------------------------
 
@@ -216,7 +247,10 @@ class Controller:
 
     def _modal(self, dlg: wx.Dialog) -> int:
         wx.CallAfter(bring_to_front, dlg)
-        return dlg.ShowModal()
+        log.debug("dialog opened: %s", dlg.GetTitle())
+        result = dlg.ShowModal()
+        log.debug("dialog closed: %s (%s)", dlg.GetTitle(), {wx.ID_OK: "OK", wx.ID_CANCEL: "cancelled"}.get(result, result))
+        return result
 
     # -- adding downloads -------------------------------------------------------
 
@@ -290,6 +324,7 @@ class Controller:
         to Downpour again, which declines it this time."""
         import webbrowser
 
+        log.info("download %s: handing it to the browser for ten minutes", dl.id)
         self._handed_back[dl.url] = time.time() + 600
         self.engine.pause([dl.id])
         webbrowser.open(dl.url)
@@ -311,6 +346,7 @@ class Controller:
     def wait_for_new_address(self, dl: Download) -> None:
         """IDM's "refresh download address": the next matching download the
         browser hands over renews this one's link instead of starting again."""
+        log.info("download %s: waiting for a fresh address from the browser", dl.id)
         self._awaiting_refresh = dl.id
         self.engine.pause([dl.id])
         forms.message(
@@ -333,6 +369,7 @@ class Controller:
         dl = item_to_download(item)
         target = self._refresh_match(dl)
         if target is not None:
+            log.info("download %s: received its fresh address", target.id)
             self._awaiting_refresh = None
             target.cookies = dl.cookies or target.cookies
             target.referrer = dl.referrer or target.referrer
@@ -342,6 +379,7 @@ class Controller:
             return
         existing = self.engine.find_url(dl.url)
         if existing is not None and existing.status != Status.COMPLETED:
+            log.info("download %s already has this address; resuming it instead of adding another", existing.id)
             self.engine.start([existing.id])
             self.feedback.say(f"Already in the list: {existing.display_name()}. Resuming.")
             return
@@ -358,6 +396,7 @@ class Controller:
                 return
             choice = dlg.choice
         start = choice == DownloadInfoDialog.START
+        log.info("new download confirmed: %s, %s", dl.display_name(), "start now" if start else "later")
         try:
             self.engine.add(dl, start=start, force=start)
         except ValueError as e:
@@ -452,8 +491,10 @@ class Controller:
     def _install(self, title: str, message: str, installer) -> bool:
         finished, result = run_with_progress(self._parent(), title, message, installer)
         if not finished:
+            log.info("%s: cancelled", title)
             return False
         if isinstance(result, BaseException):
+            log.error("%s failed", title, exc_info=(type(result), result, result.__traceback__))
             forms.message(self._parent(), f"{title} failed: {result}", icon=wx.ICON_ERROR)
             return False
         self.feedback.say(f"{title.replace('Installing', '').strip()} is installed")
@@ -487,6 +528,12 @@ class Controller:
         self.apply_settings()
 
     def apply_settings(self) -> None:
+        now = asdict(self.settings)
+        changes = settings_mod.differences(self._applied, now)
+        if changes:
+            log.info("settings changed: %s", "; ".join(changes))
+        self._applied = now
+        logs.set_detailed(self.settings.detailed_logging or self.debug or logs.forced_detailed())
         settings_mod.save(self.settings)
         self.engine.apply_settings()
         try:
@@ -504,6 +551,36 @@ class Controller:
             self.open_download(dl)
         elif answer == wx.ID_NO:
             self.open_folder(dl)
+
+    def open_log_folder(self) -> None:
+        try:
+            winutil.open_path(str(logs_dir()))
+        except OSError as e:
+            forms.message(self._parent(), f"Could not open the log folder {logs_dir()}: {e}", icon=wx.ICON_ERROR)
+
+    def log_environment(self) -> None:
+        """Start-up facts that explain most reports: what differs from the
+        defaults, whether speech and the browser helper work, and so on."""
+        changed = settings_mod.differences(settings_mod.Settings(), self.settings)
+        log.info("settings that differ from the defaults: %s", "; ".join(changed) or "none")
+        speech = self.feedback.speech
+        log.info(
+            "speech: NVDA controller client %s, NVDA %s",
+            "loaded" if speech.loaded else "missing", "running" if speech.available else "not running",
+        )
+        try:
+            from downpour.browser import install
+
+            report = install.status()
+            log.info("browser helper: %s", "; ".join(f"{name} {state}" for name, state in report.items()))
+            log.debug("browser helper program: %s", install.host_program())
+        except Exception as e:  # noqa: BLE001 - only for the log
+            log.warning("could not read the browser helper status: %r", e)
+        log.info("start with Windows: %s", winutil.start_with_windows_command() or "not set")
+        log.info(
+            "yt-dlp at %s, FFmpeg at %s",
+            media.find_ytdlp(self.settings) or "nowhere", media.find_ffmpeg(self.settings) or "nowhere",
+        )
 
     def about(self) -> None:
         forms.message(
@@ -588,6 +665,7 @@ class Controller:
 
     def _queue_finished(self) -> None:
         action = self.settings.when_done
+        log.info("every download has finished; when done: %s", action)
         if action == "nothing":
             return
         self.feedback.announce("All downloads finished", "", sound="queue-done", spoken="All downloads finished")
@@ -595,6 +673,7 @@ class Controller:
         def show():
             with CountdownDialog(self._parent(), action) as dlg:
                 if self._modal(dlg) != wx.ID_OK:
+                    log.info("when-done action %s cancelled by the user", action)
                     return
             self.settings.when_done = "nothing"  # one-shot, like IDM
             settings_mod.save(self.settings)
@@ -610,6 +689,7 @@ class Controller:
     def exit(self, then=None) -> None:
         if self._exiting:
             return
+        log.info("exiting%s", " and then running the when-done action" if then else "")
         self._exiting = True
         self._after_exit = then
         self.timer.Stop()
@@ -673,8 +753,10 @@ class ClipboardWatcher:
         name = filenames.from_url(url)
         ext = os.path.splitext(name)[1].lower().lstrip(".")
         if ext not in self.ctl.settings.capture_extensions:
+            log.debug("clipboard: %s is not a file type to take over", redact_url(url))
             return
         self._last_url = url
+        log.info("clipboard: offering %s", redact_url(url))
         self.ctl.offer({"url": url})
 
 
@@ -689,32 +771,21 @@ def autostart_command() -> str:
     return f'"{runner}" -c "{code}"'
 
 
-def _setup_logging() -> None:
-    handler = logging.handlers.RotatingFileHandler(data_dir() / "downpour.log", maxBytes=1_000_000, backupCount=3, encoding="utf-8")
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-    root = logging.getLogger()
-    root.addHandler(handler)
-    root.setLevel(logging.INFO)
+def _setup_logging() -> Path:
+    path = logs.setup("downpour.log", detailed=True)  # settings decide the level once they are loaded
 
-    def excepthook(kind, value, tb):
-        log.error("unhandled error:\n%s", "".join(traceback.format_exception(kind, value, tb)))
-        try:
-            wx.MessageBox(f"Something went wrong: {value}\n\nDetails are in {data_dir() / 'downpour.log'}",
-                          "Downpour error", wx.OK | wx.ICON_ERROR)
-        except Exception:  # noqa: BLE001 - never let the error handler fail
-            pass
+    def tell_user(value: BaseException) -> None:
+        wx.MessageBox(f"Something went wrong: {value}\n\nDetails are in {path}", "Downpour error", wx.OK | wx.ICON_ERROR)
 
-    sys.excepthook = excepthook
-    threading.excepthook = lambda args: log.error(
-        "unhandled error in thread %s:\n%s", args.thread.name if args.thread else "?",
-        "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)),
-    )
+    logs.install_excepthooks(on_error=tell_user)
+    return path
 
 
-def run(urls: list[str] | None = None, tray: bool = False) -> int:
+def run(urls: list[str] | None = None, tray: bool = False, debug: bool = False) -> int:
     _setup_logging()
-    log.info("starting %s %s", APP_NAME, __version__)
     settings = settings_mod.load()
+    debug = debug or logs.forced_detailed()
+    logs.set_detailed(settings.detailed_logging or debug)
     ready = threading.Event()
     holder: dict[str, Controller] = {}
 
@@ -727,31 +798,42 @@ def run(urls: list[str] | None = None, tray: bool = False) -> int:
         server = ipc.Server(handler)
     except ipc.AlreadyRunning:
         if tray and not urls:
+            log.info("started with Windows while already running; nothing to do")
             return 0  # started with Windows while already running: stay out of sight
         message = {"type": "add", "items": [{"url": u} for u in urls], "pick": len(urls) > 1} if urls else {"type": "show"}
+        log.info("another copy is running; passing it a %s request", message["type"])
         try:
             ipc.request(message)
         except Exception:  # noqa: BLE001 - this copy is exiting either way
             log.warning("could not reach the running copy", exc_info=True)
         return 0
 
+    logs.banner("window app", sys.argv[1:])
+    logs.enable_crash_log()
     app = wx.App(False)
     app.SetAppName(APP_NAME)
+    log.info("wxPython %s", wx.version())
     engine = Engine(Store(data_dir() / "downpour.db"), settings)
-    ctl = Controller(app, settings, engine)
+    ctl = Controller(app, settings, engine, debug=debug)
     holder["ctl"] = ctl
+    ctl.log_environment()
     server.start()
     ready.set()
     engine.begin()
+    watchdog = logs.Watchdog(wx.CallAfter)
+    watchdog.start()
     if not tray:
         ctl.show_window()
     if urls:
         wx.CallAfter(ctl.add_urls, urls)
     app.MainLoop()
+    watchdog.stop()
+    log.info("window closed; stopping")
     server.close()
     engine.shutdown()
     after = getattr(ctl, "_after_exit", None)
     if after is not None:
         after()
     log.info("stopped")
+    logging.shutdown()
     return 0

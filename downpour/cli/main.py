@@ -3,7 +3,12 @@
     downpour                      open Downpour (or bring the running one forward)
     downpour URL [URL ...]        hand links to the running Downpour
     downpour --tray               start in the notification area
+    downpour --debug              also write detailed logs, whatever Options says
     downpour get URL [options]    download in this console, no window
+    downpour helper [install | remove | status]
+                                  register this copy as the browsers' helper
+
+Logs are in %LOCALAPPDATA%\\Downpour\\logs (see downpour/core/logs.py).
 
 ``get`` keeps its own small database, so running the same command again
 after an interruption resumes instead of starting over. Progress is printed
@@ -26,6 +31,8 @@ from downpour import APP_NAME, __version__
 def main(argv: list[str]) -> int:
     if argv and argv[0] == "get":
         return _get(argv[1:])
+    if argv and argv[0] == "helper":
+        return _helper(argv[1:])
     if argv and argv[0] in ("-V", "--version", "version"):
         print(f"{APP_NAME} {__version__}")
         return 0
@@ -33,15 +40,16 @@ def main(argv: list[str]) -> int:
         print(__doc__.strip())
         return 0
     tray = "--tray" in argv
+    debug = "--debug" in argv
     urls = [a for a in argv if a.lower().startswith(("http://", "https://"))]
-    unknown = [a for a in argv if a not in urls and a != "--tray"]
+    unknown = [a for a in argv if a not in urls and a not in ("--tray", "--debug")]
     if unknown:
         print(f"Unknown argument: {unknown[0]}. Try: downpour --help", file=sys.stderr)
         return 2
-    return _gui(urls, tray)
+    return _gui(urls, tray, debug)
 
 
-def _gui(urls: list[str], tray: bool) -> int:
+def _gui(urls: list[str], tray: bool, debug: bool = False) -> int:
     from downpour.core import ipc
 
     message = {"type": "add", "items": [{"url": u} for u in urls], "pick": len(urls) > 1} if urls else {"type": "show"}
@@ -56,7 +64,40 @@ def _gui(urls: list[str], tray: bool) -> int:
     except ImportError as e:
         print(f"The Downpour window needs wxPython: {e}", file=sys.stderr)
         return 1
-    return run(urls=urls, tray=tray)
+    return run(urls=urls, tray=tray, debug=debug)
+
+
+def _helper(argv: list[str]) -> int:
+    """The Options dialog's browser helper buttons, for install scripts."""
+    from downpour.core import logs
+
+    action = argv[0] if argv else "status"
+    if action not in ("install", "remove", "status") or len(argv) > 1:
+        print("Usage: downpour helper [install | remove | status]", file=sys.stderr)
+        return 2
+    logs.setup("cli.log", detailed=logs.detailed_setting())
+    log = logging.getLogger("downpour.cli")
+    try:
+        from downpour.browser import install
+    except ImportError as e:
+        print(f"Browser integration is not available in this build: {e}", file=sys.stderr)
+        return 1
+    try:
+        if action == "install":
+            done = install.register()
+            log.info("browser helper registered for %s, program %s", done, install.host_program())
+        elif action == "remove":
+            done = install.unregister()
+            log.info("browser helper removed from %s", done)
+        report = install.status()
+    except OSError as e:
+        log.exception("browser helper %s failed", action)
+        print(f"Could not {action} the browser helper: {e}", file=sys.stderr)
+        return 1
+    print(f"Helper program: {install.host_program()}")
+    for name, state in report.items():
+        print(f"{name}: {state}")
+    return 0
 
 
 def _get(argv: list[str]) -> int:
@@ -76,10 +117,16 @@ def _get(argv: list[str]) -> int:
     parser.add_argument("--checksum", help="expected checksum, for example sha256:abc123...")
     parser.add_argument("--referrer", default="")
     parser.add_argument("-q", "--quiet", action="store_true", help="only print the result")
+    parser.add_argument("-v", "--verbose", action="store_true", help="also print the log here")
+    parser.add_argument("--debug", action="store_true", help="write detailed logs whatever Options says")
     args = parser.parse_args(argv)
 
-    logging.basicConfig(level=logging.WARNING, format="%(message)s")
+    from downpour.core import logs
+
+    log_path = logs.setup("cli.log", detailed=True, console_level=logging.DEBUG if args.verbose else logging.WARNING)
     settings = settings_mod.load()
+    logs.set_detailed(settings.detailed_logging or args.debug or args.verbose or logs.forced_detailed())
+    logs.banner("command line", ["get", *argv])
     settings.use_category_folders = False
     settings.max_active = 1
     limit = 0
@@ -159,4 +206,5 @@ def _get(argv: list[str]) -> int:
         print(f"Stopped. Run the same command again to resume {dl.filename}.")
         return 130
     print(f"Failed: {dl.error}", file=sys.stderr)
+    print(f"Details are in {log_path}", file=sys.stderr)
     return 1

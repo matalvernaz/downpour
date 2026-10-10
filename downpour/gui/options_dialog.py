@@ -76,6 +76,17 @@ class OptionsDialog(wx.Dialog):
         self.notify_complete = forms.check(p, sz, "Show Windows &notifications when nothing was spoken", s.notify_complete)
         self.scan_after_download = forms.check(p, sz, "Scan finished downloads with Microsoft &Defender", s.scan_after_download)
         self.mark_of_the_web = forms.check(p, sz, "&Mark downloaded files as coming from the internet (recommended)", s.mark_of_the_web)
+        self.detailed_logging = forms.check(p, sz, "Write detailed &logs for troubleshooting", s.detailed_logging)
+        logs_button = wx.Button(p, label="Open the log &folder")
+        logs_button.Bind(wx.EVT_BUTTON, self._open_logs)
+        sz.Add(logs_button, 0, wx.ALL, 6)
+
+    def _open_logs(self, evt):
+        folder = paths.logs_dir()
+        if sys.platform == "win32":
+            os.startfile(folder)  # noqa: S606
+        else:
+            forms.message(self, f"The logs are in {folder}.")
 
     def _connection(self):
         p, sz = self._page("Connection")
@@ -312,7 +323,7 @@ class OptionsDialog(wx.Dialog):
             "start_with_windows", "close_to_tray", "clipboard_monitor", "show_info_dialog",
             "show_complete_dialog", "speak_events", "sound_complete", "notify_complete",
             "scan_after_download", "mark_of_the_web", "speed_limit_enabled", "use_category_folders",
-            "browser_capture", "schedule_enabled",
+            "browser_capture", "schedule_enabled", "detailed_logging",
         ):
             setattr(s, name, getattr(self, name).GetValue())
         s.max_connections = self.max_connections.GetValue()

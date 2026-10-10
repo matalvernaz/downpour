@@ -35,9 +35,10 @@ from typing import TYPE_CHECKING
 from downpour.core import checksum, net, winutil
 from downpour.core import segments as seglib
 from downpour.core.limiter import RateLimiter
+from downpour.core.logs import describe_error, redact_url, summarize_cookies
 from downpour.core.models import Download, Status
 from downpour.core.segments import Segment
-from downpour.core.units import format_size
+from downpour.core.units import format_duration, format_size, format_speed
 
 if TYPE_CHECKING:
     from downpour.core.engine import Engine
@@ -107,6 +108,8 @@ class HttpTask:
         self._next_spawn = 0.0
         self._max_conn = 1
         self._received = 0
+        self._started = 0.0
+        self._peak_connections = 0
         self._samples: collections.deque[tuple[float, int]] = collections.deque()
         self.checkpointed: list | None = None  # last segment snapshot known to be on disk
         self.thread = threading.Thread(target=self._run, name=f"download-{dl.id}", daemon=True)
@@ -137,6 +140,8 @@ class HttpTask:
     def _run(self) -> None:
         dl = self.dl
         outcome, error = Outcome.STOPPED, ""
+        self._started = time.monotonic()
+        self._log_start()
         try:
             first = self._prepare()
             if first is not None:
@@ -147,10 +152,14 @@ class HttpTask:
             outcome = Outcome.STOPPED
         except net.HttpError as e:
             outcome, error = Outcome.FAILED, net.describe(e)
+            log.info("download %s: the server refused it: %s", dl.id, describe_error(e))
         except DownloadError as e:
             outcome, error = Outcome.FAILED, str(e)
+            if e.__cause__ is not None:
+                log.info("download %s: caused by %s", dl.id, describe_error(e.__cause__))
         except OSError as e:
             outcome, error = Outcome.FAILED, f"File error: {e.strerror or e}"
+            log.warning("download %s: file error with %s", dl.id, dl.part_path or dl.directory, exc_info=True)
         except Exception as e:  # noqa: BLE001 - a crash must still end the task cleanly
             log.exception("download %s crashed", dl.id)
             outcome, error = Outcome.FAILED, f"Unexpected error: {e}"
@@ -158,7 +167,52 @@ class HttpTask:
             self._shutdown_workers()
             self._close_file(checkpoint=outcome is not Outcome.COMPLETED)
             dl.speed, dl.eta, dl.active_connections = 0.0, None, 0
+        self._log_end(outcome, error)
         self.engine._task_done(self, outcome, error)
+
+    def _log_start(self) -> None:
+        dl = self.dl
+        settings = self.engine.settings
+        done = seglib.downloaded(dl.segments) if dl.segments else 0
+        log.info(
+            "download %s: starting %s from %s; %s of %s on disk, up to %d connections, %s",
+            dl.id, dl.filename or "(name not known yet)", redact_url(dl.url), format_size(done),
+            format_size(dl.size) if dl.size is not None else "unknown size", self._connection_limit(),
+            f"limited to {format_speed(dl.speed_limit)}" if dl.speed_limit else "no speed limit of its own",
+        )
+        log.debug(
+            "download %s: %s, %s, sign-in %s, %s, checksum %s, user agent %s, proxy %s, timeout %s s, %d retries",
+            dl.id, summarize_cookies(dl.cookies),
+            f"referrer {redact_url(dl.referrer)}" if dl.referrer else "no referrer",
+            "yes" if dl.username else "no",
+            f"extra headers {sorted(dl.headers)}" if dl.headers else "no extra headers",
+            dl.checksum.split(":", 1)[0] if dl.checksum else "none",
+            dl.user_agent or settings.user_agent, settings.proxy_mode, settings.timeout, settings.max_retries,
+        )
+
+    def _log_end(self, outcome: Outcome, error: str) -> None:
+        dl = self.dl
+        took = time.monotonic() - self._started
+        received = self._received
+        speed = format_speed(received / took) if took > 0 and received else "nothing received"
+        if outcome is Outcome.COMPLETED:
+            peak = self._peak_connections
+            log.info(
+                "download %s: completed %s, %s in %s (%s this run, %s), %d connection%s at most",
+                dl.id, dl.path, format_size(dl.size), format_duration(took), format_size(received),
+                speed, peak, "" if peak == 1 else "s",
+            )
+        elif outcome is Outcome.FAILED:
+            log.warning(
+                "download %s: failed after %s with %s received (%s on disk): %s",
+                dl.id, format_duration(took), format_size(received), format_size(dl.downloaded), error,
+            )
+        else:
+            log.info(
+                "download %s: stopped (%s) after %s, %s received, %s on disk",
+                dl.id, self.stop_status.value, format_duration(took), format_size(received),
+                format_size(dl.downloaded),
+            )
 
     def _prepare(self) -> tuple[Segment, object, net.ResponseInfo] | None:
         """Connect and open the file. Returns the first segment and its open
@@ -188,9 +242,13 @@ class HttpTask:
                 self._max_conn = self._connection_limit()
                 with self._lock:
                     seg.active = True
-                log.info("download %s: resuming at %s", dl.id, seg.pos)
+                log.info("download %s: resuming at byte %s of %s", dl.id, seg.pos, dl.size)
                 return seg, resp, info
-            log.info("download %s: the server no longer matches the partial file; starting over", dl.id)
+            log.info(
+                "download %s: the server no longer matches the partial file (HTTP %s, %s, starts at %s, "
+                "file size %s, expected %s); starting over",
+                dl.id, info.status, "ranged" if info.ranged else "not ranged", info.start, info.total, dl.size,
+            )
             if info.status == 200:
                 return self._start_fresh(resp, info)  # already the whole file from byte 0
             self._discard(resp)
@@ -201,9 +259,13 @@ class HttpTask:
         if not (dl.resumable and dl.size is not None and dl.segments and dl.filename):
             return False
         try:
-            return os.path.getsize(dl.part_path) == dl.size
+            on_disk = os.path.getsize(dl.part_path)
         except OSError:
+            log.info("download %s: no partial file at %s, so it starts from the beginning", dl.id, dl.part_path)
             return False
+        if on_disk != dl.size:
+            log.info("download %s: the partial file is %s bytes, expected %s; starting over", dl.id, on_disk, dl.size)
+        return on_disk == dl.size
 
     def _start_fresh(self, resp=None, info: net.ResponseInfo | None = None) -> tuple[Segment, object, net.ResponseInfo]:
         dl = self.dl
@@ -244,9 +306,14 @@ class HttpTask:
         self.engine.save(dl)
         self._max_conn = self._connection_limit() if dl.resumable else 1
         log.info(
-            "download %s: %s, %s, %s",
+            "download %s: %s, %s, %s, type %s, saving in %s",
             dl.id, dl.filename, format_size(size), "resumable" if dl.resumable else "not resumable",
+            dl.mime or "unknown", dl.directory,
         )
+        if info.url != dl.url:
+            log.info("download %s: the link leads to %s", dl.id, redact_url(info.url))
+        if info.disposition:
+            log.debug("download %s: the server named it %r", dl.id, info.filename)
         return dl.segments[0], resp, info
 
     def _connection_limit(self) -> int:
@@ -271,6 +338,7 @@ class HttpTask:
                 complete = seglib.all_done(dl.segments)
                 dl.downloaded = seglib.downloaded(dl.segments)
                 dl.active_connections = busy
+                self._peak_connections = max(self._peak_connections, busy)
                 failures = self._failures
                 # Open every allowed connection at once, as IDM and aria2 do;
                 # after a failure, wait out the backoff first.
@@ -317,6 +385,7 @@ class HttpTask:
                         return  # the segment was handed back
                 resp, info = opened
                 ended = self._pump(seg, resp, info.length)
+                log.debug("download %s: connection %s at byte %s", self.dl.id, ended, seg.pos)
                 self._discard(resp)
                 resp = opened = None
                 if ended == BROKEN:
@@ -393,6 +462,7 @@ class HttpTask:
                 self._responses.add(resp)
             if self._stop.is_set():
                 net.abort(resp)
+            log.debug("download %s: connection open for bytes %s to %s", dl.id, start, end if end is not None else "end")
             return resp, info
         return None
 
@@ -468,9 +538,13 @@ class HttpTask:
         with self._lock:
             self._failures += 1
             self._last_error = error
-            self._next_spawn = time.monotonic() + backoff(self._failures)
+            wait = backoff(self._failures)
+            self._next_spawn = time.monotonic() + wait
             count = self._failures
-        log.info("download %s: attempt failed (%d): %s", self.dl.id, count, net.describe(error))
+        log.info(
+            "download %s: attempt failed (%d of %d allowed, next try in %.0f s): %s",
+            self.dl.id, count, self.engine.settings.max_retries, wait, describe_error(error),
+        )
 
     def _release(self, seg: Segment, ration: bool = False) -> None:
         """Hand a segment back so another connection can take it."""
@@ -514,6 +588,7 @@ class HttpTask:
             self._fail(DownloadError("The server stopped accepting resumed downloads. Try again later, or use Redownload."))
 
     def _fail(self, error: DownloadError) -> None:
+        log.info("download %s: giving up: %s", self.dl.id, error)
         with self._lock:
             if self._fatal is None:
                 self._fatal = error
@@ -661,6 +736,10 @@ class HttpTask:
                 except InterruptedError as e:
                     raise Stopped() from e
                 dl.checksum_ok = actual == expected
+                log.info(
+                    "download %s: %s checksum %s", dl.id, algo.upper(),
+                    "matches" if dl.checksum_ok else f"is {actual}, expected {expected}",
+                )
                 if not dl.checksum_ok:
                     raise DownloadError(
                         f"Checksum mismatch: expected {algo.upper()} {expected}, got {actual}. "
@@ -677,6 +756,7 @@ class HttpTask:
             os.replace(part, final)
         except OSError as e:
             raise DownloadError(f"Could not rename the finished file: {e.strerror or e}") from e
+        log.debug("download %s: renamed %s to %s", dl.id, part, final)
         if settings.mark_of_the_web:
             winutil.write_zone_identifier(
                 str(final), net.safe_url(self._fetch_url or dl.url),
@@ -685,6 +765,7 @@ class HttpTask:
         dl.completed_at = time.time()
         if settings.scan_after_download:
             clean, message = winutil.scan_with_defender(str(final))
+            log.info("download %s: Defender says: %s", dl.id, message)
             if not clean:
                 # The scan runs without remediation, so nothing else removes it.
                 try:

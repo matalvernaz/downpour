@@ -45,6 +45,12 @@ def data_dir() -> Path:
     return path
 
 
+def logs_dir() -> Path:
+    path = data_dir() / "logs"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def downloads_dir() -> Path:
     """The user's real Downloads folder, even when it has been relocated."""
     if sys.platform == "win32":
