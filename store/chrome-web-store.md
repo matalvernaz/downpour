@@ -112,3 +112,17 @@ ID `papnanikngmdnacmhecbigmbkbjfaboa`, listed in `CHROMIUM_EXTENSION_IDS`
 in `downpour/browser/ids.py` so the browser helper accepts the store copy
 as well as the unpacked one. A Downpour installed before that change
 needs installing again.
+
+## Updates, without the dashboard
+
+After the first approval, new versions go up by script:
+
+1. Raise `"version"` in `extension/manifest.json`.
+2. Run `python tools/make_store_assets.py`.
+3. Run `python tools/publish_chrome.py publish`, which uploads the zip and
+   submits it for review. `status` reports what the store says.
+
+The script signs in as the service account on the dashboard's Settings
+page. Its JSON key lives outside the repository, in
+`%USERPROFILE%\.secrets\downpour-cws-service-account.json` (or the path in
+`DOWNPOUR_CWS_KEY`), and it needs `pip install cryptography`.
