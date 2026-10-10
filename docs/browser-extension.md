@@ -7,8 +7,10 @@ It works in Firefox, Chrome, Edge and Brave. Setting it up takes two parts:
    install it once, from Downpour.
 2. The extension itself, added to each browser you use.
 
-The extension is in the `extension` folder inside the Downpour folder. In a
-source checkout that is `C:\claudeProjects\downpour\extension`.
+The extension is in the `extension` folder inside the Downpour folder,
+`%LOCALAPPDATA%\Programs\Downpour\extension` when installed with
+`tools\install.ps1`. In a source checkout it is the `extension` folder at
+the top of the repository.
 
 ## Part 1: install the browser helper
 

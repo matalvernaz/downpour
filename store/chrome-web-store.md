@@ -34,7 +34,9 @@ Private by design: the extension talks only to the Downpour app on your own comp
 - Store icon: `dist\store\icon-128.png`
 - Screenshot: `dist\store\screenshot-1280x800.png`
 - Small promo tile: `dist\store\promo-440x280.png`
-- Marquee promo tile, homepage URL, support URL: leave empty
+- Homepage URL: https://github.com/matalvernaz/downpour
+- Support URL: https://github.com/matalvernaz/downpour/issues
+- Marquee promo tile: leave empty
 
 ## Privacy tab
 

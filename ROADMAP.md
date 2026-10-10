@@ -26,9 +26,16 @@ recommended by blind users. That gap is Downpour's reason to exist.
   flaw.
 - Free, no nags, no telemetry, no bundled offers.
 
+## Done since
+
+- The Firefox extension is signed by Mozilla (unlisted), so it installs
+  permanently.
+- Detailed logs of every part, with secrets kept out (docs/logging.md).
+
 ## Next
 
-- Firefox signing, so the extension installs permanently in Firefox.
+- The Chrome Web Store listing (unlisted), then an installer that sets up
+  Downpour and points each browser at its signed or store extension.
 - A list of the media found on the current page, to pick from, in addition
   to handing the page to yt-dlp.
 - Recent folders in the new-download dialog.
