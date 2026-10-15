@@ -44,6 +44,12 @@ class MediaDialog(wx.Dialog):
         self.quality = wx.ListBox(self, choices=[c.label for c in self.choices], style=wx.LB_SINGLE)
         self.quality.SetMinSize((-1, 180))
         sizer.Add(self.quality, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+        bitrate_note = "" if media.find_ffmpeg(settings) else " (install FFmpeg to use this)"
+        self.audio_bitrate = forms.choice(
+            self, sizer, f"&Audio quality for video (lower means a smaller file){bitrate_note}:",
+            [label for _, label in media.AUDIO_BITRATES],
+            next((i for i, (kb, _) in enumerate(media.AUDIO_BITRATES) if kb == settings.audio_bitrate), 0),
+        )
         self.name = forms.text(self, sizer, "File &name:", "")
         self.folder = forms.folder_row(self, sizer, "Save &to:", folder_for_category(settings, "Video"), settings.recent_folders)
         self.whole_playlist = forms.check(self, sizer, "Download every item in the &playlist", True)
@@ -173,6 +179,7 @@ class MediaDialog(wx.Dialog):
             "metadata": self.metadata.GetValue(),
             "clip_start": self.clip_start.GetValue().strip(),
             "clip_end": self.clip_end.GetValue().strip(),
+            "audio_bitrate": media.AUDIO_BITRATES[self.audio_bitrate.GetSelection()][0],
         }
         self.playlist = bool(self.info and self.info.is_playlist and self.whole_playlist.GetValue())
         self.EndModal(wx.ID_OK)

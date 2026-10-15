@@ -142,6 +142,7 @@ class Settings:
     subtitle_language: str = "en"
     sponsorblock: bool = False  # cut sponsor segments with SponsorBlock (needs FFmpeg)
     media_metadata: bool = True  # tags, chapters and cover art in the file (needs FFmpeg)
+    audio_bitrate: int = 0  # re-encode a video's audio to this many kbps (0 = keep the original; needs FFmpeg)
     ytdlp_path: str = ""
     ffmpeg_path: str = ""
 

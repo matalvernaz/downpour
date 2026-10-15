@@ -339,6 +339,11 @@ class OptionsDialog(wx.Dialog):
         self.subtitle_language = forms.text(p, sz, "Subtitle language (for example en):", s.subtitle_language)
         self.sponsorblock = forms.check(p, sz, "Cut sponsor segments with Sponsor&Block by default", s.sponsorblock)
         self.media_metadata = forms.check(p, sz, "Put tags, chapters and cover art in video and audio files", s.media_metadata)
+        self.audio_bitrate = forms.choice(
+            p, sz, "Default &audio quality for video (lower means a smaller file; re-encodes, needs FFmpeg):",
+            [label for _, label in media.AUDIO_BITRATES],
+            next((i for i, (kb, _) in enumerate(media.AUDIO_BITRATES) if kb == s.audio_bitrate), 0),
+        )
         self.tool_status = forms.readonly(p, sz, "&Helper programs:", self._tool_text(), lines=3)
         row = wx.BoxSizer(wx.HORIZONTAL)
         for label, handler in (
@@ -349,7 +354,7 @@ class OptionsDialog(wx.Dialog):
             b.Bind(wx.EVT_BUTTON, handler)
             row.Add(b, 0, wx.RIGHT, 6)
         sz.Add(row, 0, wx.ALL, 6)
-        self.ytdlp_path = forms.text(p, sz, "yt-dlp &program (leave empty to find it automatically):", s.ytdlp_path)
+        self.ytdlp_path = forms.text(p, sz, "yt-dlp &program or folder (leave empty to find it automatically):", s.ytdlp_path)
         self.ffmpeg_path = forms.text(p, sz, "FFmpeg program or f&older (leave empty to find it automatically):", s.ffmpeg_path)
 
     def _tool_text(self) -> str:
@@ -462,6 +467,7 @@ class OptionsDialog(wx.Dialog):
         s.subtitle_language = self.subtitle_language.GetValue().strip() or "en"
         s.sponsorblock = self.sponsorblock.GetValue()
         s.media_metadata = self.media_metadata.GetValue()
+        s.audio_bitrate = media.AUDIO_BITRATES[self.audio_bitrate.GetSelection()][0]
         s.ytdlp_path = self.ytdlp_path.GetValue().strip()
         s.ffmpeg_path = self.ffmpeg_path.GetValue().strip()
         s.categories = [Category(c.name, c.extensions, c.folder, list(c.sites)) for c in s.categories]

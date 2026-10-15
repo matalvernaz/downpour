@@ -34,7 +34,7 @@ from urllib.parse import urlsplit
 from downpour.core import filenames
 from downpour.core.logs import redact_arg, redact_url, summarize_cookies
 from downpour.core.models import Download, Status
-from downpour.core.paths import data_dir
+from downpour.core.paths import app_dir, data_dir
 
 if TYPE_CHECKING:
     from downpour.core.engine import Engine
@@ -64,22 +64,129 @@ def tools_dir() -> Path:
     return path
 
 
+def _as_exe(path: str, exe: str) -> str | None:
+    """A configured setting resolved to a runnable file: the path itself when
+    it names a file, or ``exe`` inside it when it names a folder."""
+    if not path:
+        return None
+    if os.path.isfile(path):
+        return path
+    candidate = os.path.join(path, exe)
+    return candidate if os.path.isfile(candidate) else None
+
+
+def _env_dirs(*names: str) -> list[Path]:
+    return [Path(os.environ[name]) for name in names if os.environ.get(name)]
+
+
+def _choco_dir() -> list[Path]:
+    base = os.environ.get("ChocolateyInstall") or r"C:\ProgramData\chocolatey"
+    return [Path(base) / "bin"]
+
+
+def _ytdlp_dirs() -> list[Path]:
+    """Folders where yt-dlp is likely to sit, best first, not counting the
+    configured path or the PATH."""
+    dirs = [tools_dir(), app_dir(), app_dir() / "tools", data_dir()]
+    for base in _env_dirs("LOCALAPPDATA"):
+        dirs += [base / "Programs" / "yt-dlp", base / "Microsoft" / "WinGet" / "Links"]
+    for base in _env_dirs("USERPROFILE"):
+        dirs.append(base / "scoop" / "apps" / "yt-dlp" / "current")
+    return dirs + _choco_dir()
+
+
+def _ffmpeg_dirs() -> list[Path]:
+    dirs = [tools_dir() / "ffmpeg", tools_dir() / "ffmpeg" / "bin", app_dir(),
+            app_dir() / "ffmpeg" / "bin", app_dir() / "tools", data_dir(),
+            Path(r"C:\ffmpeg\bin"), Path(r"C:\ffmpeg")]
+    for base in _env_dirs("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
+        dirs += [base / "ffmpeg" / "bin", base / "ffmpeg"]
+    for base in _env_dirs("LOCALAPPDATA"):
+        dirs += [base / "Programs" / "ffmpeg" / "bin", base / "Microsoft" / "WinGet" / "Links"]
+    for base in _env_dirs("USERPROFILE"):
+        dirs.append(base / "scoop" / "apps" / "ffmpeg" / "current" / "bin")
+    return dirs + _choco_dir()
+
+
+def _sibling_dir(configured: str, exe: str, base: str) -> list[Path]:
+    """The folder of the companion tool, found cheaply, so a yt-dlp and an
+    FFmpeg kept side by side discover each other."""
+    found = _as_exe(configured, exe) or shutil.which(base) or shutil.which(exe)
+    return [Path(found).parent] if found else []
+
+
 def find_ytdlp(settings: "Settings | None" = None) -> str | None:
     configured = getattr(settings, "ytdlp_path", "") if settings else ""
-    for candidate in (configured, str(tools_dir() / "yt-dlp.exe")):
-        if candidate and os.path.isfile(candidate):
-            return candidate
-    return shutil.which("yt-dlp")
+    sibling = getattr(settings, "ffmpeg_path", "") if settings else ""
+    return _search(configured, "yt-dlp", "yt-dlp.exe", _ytdlp_dirs() + _sibling_dir(sibling, "ffmpeg.exe", "ffmpeg"))
 
 
 def find_ffmpeg(settings: "Settings | None" = None) -> str | None:
     configured = getattr(settings, "ffmpeg_path", "") if settings else ""
-    for candidate in (configured, str(tools_dir() / "ffmpeg" / "ffmpeg.exe")):
-        if candidate and os.path.isfile(candidate):
+    sibling = getattr(settings, "ytdlp_path", "") if settings else ""
+    return _search(configured, "ffmpeg", "ffmpeg.exe", _ffmpeg_dirs() + _sibling_dir(sibling, "yt-dlp.exe", "yt-dlp"))
+
+
+def _search(configured: str, base: str, exe: str, dirs: list[Path]) -> str | None:
+    """Resolve a tool: the configured path, then the likely folders, then the
+    PATH, then (only if still missing) the PATH as the registry records it now
+    and winget's own package folders."""
+    found = _as_exe(configured, exe)
+    if found:
+        return found
+    seen: set[str] = set()
+    for d in dirs:
+        key = os.path.normcase(str(d))
+        if key in seen:
+            continue
+        seen.add(key)
+        candidate = os.path.join(str(d), exe)
+        if os.path.isfile(candidate):
             return candidate
-        if candidate and os.path.isdir(candidate) and os.path.isfile(os.path.join(candidate, "ffmpeg.exe")):
-            return os.path.join(candidate, "ffmpeg.exe")
-    return shutil.which("ffmpeg")
+    on_path = shutil.which(base) or shutil.which(exe)
+    if on_path:
+        return on_path
+    for d in _registry_path_dirs() + _winget_package_dirs(base):
+        candidate = os.path.join(str(d), exe)
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _registry_path_dirs() -> list[str]:
+    """The PATH as the registry holds it now. A Downpour started before a tool
+    was installed would not have inherited the change into its own PATH."""
+    if sys.platform != "win32":
+        return []
+    import winreg
+
+    out: list[str] = []
+    for root, sub in ((winreg.HKEY_CURRENT_USER, "Environment"),
+                      (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")):
+        try:
+            with winreg.OpenKey(root, sub) as key:
+                value, _ = winreg.QueryValueEx(key, "Path")
+        except OSError:
+            continue
+        out += [os.path.expandvars(p) for p in str(value).split(os.pathsep) if p.strip()]
+    return out
+
+
+def _winget_package_dirs(base: str) -> list[Path]:
+    """Folders of winget packages whose name mentions the tool; their binaries
+    live here but, unlike the shims, are not on the PATH."""
+    local = os.environ.get("LOCALAPPDATA")
+    if not local:
+        return []
+    packages = Path(local) / "Microsoft" / "WinGet" / "Packages"
+    out: list[Path] = []
+    try:
+        for entry in packages.iterdir():
+            if base.lower() in entry.name.lower() and entry.is_dir():
+                out += [match.parent for match in entry.rglob(f"{base}.exe")]
+    except OSError:
+        pass
+    return out
 
 
 def _fetch(url: str, progress: Callable[[int, int | None], None] | None = None, stop: threading.Event | None = None) -> bytes:
@@ -250,7 +357,35 @@ PRESETS = [
 ]
 
 # The per-download options a Download's media_options may hold.
-MEDIA_OPTIONS = ("audio_language", "subtitles", "subtitle_language", "sponsorblock", "metadata", "clip_start", "clip_end")
+MEDIA_OPTIONS = ("audio_language", "subtitles", "subtitle_language", "sponsorblock", "metadata",
+                 "clip_start", "clip_end", "audio_bitrate")
+
+# Audio bitrates (kbps) offered for a video download. 0 keeps the source audio
+# untouched; any other value re-encodes the finished file's audio to that rate,
+# which is the only way to reach a bitrate no site actually serves.
+AUDIO_BITRATES = [
+    (0, "Original (keep the source audio)"),
+    (192, "192 kbps"),
+    (128, "128 kbps"),
+    (96, "96 kbps"),
+    (64, "64 kbps"),
+    (48, "48 kbps"),
+    (32, "32 kbps"),
+]
+
+
+def _audio_encoder(ext: str) -> str:
+    """The FFmpeg audio encoder for re-encoding, chosen by the file's container
+    so the result still plays: Opus where the container prefers it (and because
+    it is far better than AAC at low bitrates), MP3 for .mp3, AAC otherwise."""
+    ext = ext.lower().lstrip(".")
+    if ext in ("webm", "mkv", "ogg", "oga", "opus"):
+        return "libopus"
+    if ext == "mp3":
+        return "libmp3lame"
+    if ext == "ogv":
+        return "libvorbis"
+    return "aac"  # mp4, m4a, mov and anything else that takes AAC
 SUBTITLE_MODES = [
     ("none", "No subtitles"),
     ("embed", "Subtitles inside the video"),
@@ -853,9 +988,61 @@ class MediaTask:
         if dl.status != Status.DOWNLOADING and p.get("status") == "downloading":
             self.engine._set_status(dl, Status.DOWNLOADING)
 
+    def _maybe_reencode_audio(self, final_path: str) -> None:
+        """Re-encode the finished file's audio to the chosen bitrate, if one was
+        set and this is a video download. Audio-only presets carry their own
+        quality, so they are left alone. A failure keeps the original file."""
+        dl = self.dl
+        bitrate = int((dl.media_options or {}).get("audio_bitrate") or 0)
+        if not bitrate:
+            return
+        key = dl.media_format or ""
+        if not key.startswith("id:") and preset(key).audio_only:
+            return
+        ffmpeg = find_ffmpeg(self.engine.settings)
+        if not ffmpeg:
+            log.warning("media download %s: %d kbps audio was asked for but FFmpeg is not available; "
+                        "keeping the original audio", dl.id, bitrate)
+            return
+        if dl.status != Status.FINISHING:
+            self.engine._set_status(dl, Status.FINISHING)
+        try:
+            self._reencode_audio(final_path, bitrate, ffmpeg)
+            log.info("media download %s: audio re-encoded to %d kbps", dl.id, bitrate)
+        except InterruptedError:
+            raise
+        except (MediaError, OSError) as e:
+            log.warning("media download %s: could not re-encode the audio (%s); keeping the original", dl.id, e)
+
+    def _reencode_audio(self, final_path: str, bitrate: int, ffmpeg: str) -> None:
+        ext = os.path.splitext(final_path)[1]
+        tmp = f"{final_path}.reaudio{ext or '.mkv'}"
+        # -map 0 -c copy keeps the video and any embedded subtitles, chapters and
+        # cover art untouched; only -c:a re-encodes the audio.
+        cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", final_path,
+               "-map", "0", "-c", "copy", "-c:a", _audio_encoder(ext), "-b:a", f"{bitrate}k", tmp]
+        log.debug("media download %s: running %s", self.dl.id, " ".join(cmd))
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                encoding="utf-8", errors="replace", creationflags=NO_WINDOW, env=_env())
+        self._proc = proc  # so stop() ends this FFmpeg too
+        if self._stop.is_set():
+            _kill_tree(proc)
+            _remove(tmp)
+            raise InterruptedError("cancelled")
+        out, _ = proc.communicate()
+        if self._stop.is_set():
+            _remove(tmp)
+            raise InterruptedError("cancelled")
+        if proc.returncode != 0 or not os.path.exists(tmp):
+            _remove(tmp)
+            said = (out or "").strip().splitlines()
+            raise MediaError(said[-1] if said else "FFmpeg gave no reason")
+        os.replace(tmp, final_path)
+
     def _complete(self, final_path: str) -> None:
         dl = self.dl
         if final_path and os.path.exists(final_path):
+            self._maybe_reencode_audio(final_path)
             dl.directory, dl.filename = os.path.dirname(final_path), os.path.basename(final_path)
             dl.size = dl.downloaded = os.path.getsize(final_path)
             if (dl.media_options or {}).get("subtitles") == "text":

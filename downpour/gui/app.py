@@ -497,7 +497,7 @@ class Controller:
             start, playlist, info = dlg.start_now, dlg.playlist, dlg.info
             options = dlg.media_options
         needs_ffmpeg = chosen.needs_ffmpeg or options.get("sponsorblock") or options.get("subtitles") in ("embed", "text") \
-            or options.get("clip_start") or options.get("clip_end")
+            or options.get("clip_start") or options.get("clip_end") or options.get("audio_bitrate")
         if needs_ffmpeg and not media.find_ffmpeg(self.settings):
             self.ensure_ffmpeg(optional=True)
         if playlist and info is not None:

@@ -77,6 +77,40 @@ def test_converting_shows_as_finishing(server, make_engine, tmp_path):
     assert Status.FINISHING in seen
 
 
+def _probe(path: str, stream: str, entry: str = "codec_name") -> str:
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", stream, "-show_entries", f"stream={entry}",
+         "-of", "default=nokey=1:noprint_wrappers=1", path],
+        capture_output=True, text=True, timeout=30,
+    ).stdout.strip()
+    return out.splitlines()[0] if out else ""
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None, reason="FFmpeg not installed")
+def test_audio_bitrate_reencodes_only_the_audio(server, make_engine, tmp_path):
+    # A combined file (media_format "single", no merge) proves the re-encode
+    # runs as its own pass, not as a side effect of yt-dlp merging streams.
+    src = tmp_path / "clip.mp4"
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+         "-f", "lavfi", "-i", "testsrc=duration=1:size=128x72:rate=10",
+         "-f", "lavfi", "-i", "sine=duration=1",
+         "-c:v", "mpeg4", "-c:a", "aac", "-b:a", "128k", str(src)],
+        check=True, timeout=60,
+    )
+    url = server.add("/clips/clip.mp4", src.read_bytes(), content_type="video/mp4")
+    engine = make_engine()
+    dl = Download(url=url, kind="media", media_format="single", filename="clip.mp4",
+                  directory=str(tmp_path / "out"), media_options={"audio_bitrate": 32})
+    engine.add(dl, force=True)
+    done = wait_for(engine, dl.id, Status.COMPLETED, timeout=60)
+    assert _probe(done.path, "v") == "mpeg4"  # the video stream is untouched
+    source_abr = int(_probe(str(src), "a", "bit_rate") or 0)
+    result_abr = int(_probe(done.path, "a", "bit_rate") or 0)
+    assert result_abr and result_abr < 80_000  # dropped well below the 128 kbps source
+    assert source_abr == 0 or result_abr < source_abr
+
+
 def test_media_failure_is_reported(server, make_engine, tmp_path):
     url = server.add("/clips/missing.mp4", status=404)
     engine = make_engine()
