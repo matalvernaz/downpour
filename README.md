@@ -70,9 +70,12 @@ Video and audio
 - Grab video or audio from over a thousand sites through yt-dlp: best quality
   MP4, any format, 1080p, 720p, 480p, audio only, or MP3, plus every format
   the site lists, and whole playlists.
-- Downpour uses the yt-dlp and FFmpeg you already have, or downloads the
-  official builds for you after asking, verified against their published
-  checksums. yt-dlp updates on its own schedule.
+- Set the audio quality of a video on its own, down to 32 kbps, for a smaller
+  file: 1080p video with low-bitrate audio, for example.
+- Downpour uses the yt-dlp and FFmpeg you already have — on the PATH, next to
+  Downpour, or in a common install folder — or downloads the official builds
+  for you after asking, verified against their published checksums. yt-dlp
+  updates on its own schedule.
 - Choose the audio track's language, get subtitles or a plain-text
   transcript, cut sponsor segments (SponsorBlock), keep tags, chapters and
   cover art, download only part of a video, and pick MP3 at any bitrate,

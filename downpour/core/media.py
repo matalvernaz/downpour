@@ -2,10 +2,12 @@
 
 yt-dlp runs as a separate program rather than a bundled library. Sites change
 every few weeks and yt-dlp has to be updated on its own schedule, not wait
-for a Downpour release. Downpour looks for yt-dlp (a path in the settings,
-then its own copy, then PATH) and can fetch the official build, checking it
-against the published SHA-256 sums. FFmpeg, which yt-dlp needs to join
-separate video and audio streams, is found and fetched the same way.
+for a Downpour release. Downpour looks for yt-dlp (the configured path, then
+its own copy and the folders it runs from, then the PATH, then common install
+folders) and can fetch the official build, checking it against the published
+SHA-256 sums. FFmpeg, which yt-dlp needs to join separate video and audio
+streams and which Downpour also uses to re-encode audio to a chosen bitrate,
+is found and fetched the same way.
 
 Progress comes from yt-dlp's machine-readable progress template, one JSON
 object per line, so nothing depends on its human-readable output.
@@ -84,10 +86,16 @@ def _choco_dir() -> list[Path]:
     return [Path(base) / "bin"]
 
 
-def _ytdlp_dirs() -> list[Path]:
-    """Folders where yt-dlp is likely to sit, best first, not counting the
-    configured path or the PATH."""
-    dirs = [tools_dir(), app_dir(), app_dir() / "tools", data_dir()]
+def _ytdlp_own_dirs() -> list[Path]:
+    """Deliberate places, searched before the PATH: Downpour's own copy, the
+    folder it runs from, its data folder."""
+    return [tools_dir(), app_dir(), app_dir() / "tools", data_dir()]
+
+
+def _ytdlp_guess_dirs() -> list[Path]:
+    """Common install folders, searched only after the PATH so a tool the user
+    put on the PATH is never shadowed by a stray copy somewhere else."""
+    dirs: list[Path] = []
     for base in _env_dirs("LOCALAPPDATA"):
         dirs += [base / "Programs" / "yt-dlp", base / "Microsoft" / "WinGet" / "Links"]
     for base in _env_dirs("USERPROFILE"):
@@ -95,10 +103,13 @@ def _ytdlp_dirs() -> list[Path]:
     return dirs + _choco_dir()
 
 
-def _ffmpeg_dirs() -> list[Path]:
-    dirs = [tools_dir() / "ffmpeg", tools_dir() / "ffmpeg" / "bin", app_dir(),
-            app_dir() / "ffmpeg" / "bin", app_dir() / "tools", data_dir(),
-            Path(r"C:\ffmpeg\bin"), Path(r"C:\ffmpeg")]
+def _ffmpeg_own_dirs() -> list[Path]:
+    return [tools_dir() / "ffmpeg", tools_dir() / "ffmpeg" / "bin", app_dir(),
+            app_dir() / "ffmpeg" / "bin", app_dir() / "tools", data_dir()]
+
+
+def _ffmpeg_guess_dirs() -> list[Path]:
+    dirs = [Path(r"C:\ffmpeg\bin"), Path(r"C:\ffmpeg")]
     for base in _env_dirs("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
         dirs += [base / "ffmpeg" / "bin", base / "ffmpeg"]
     for base in _env_dirs("LOCALAPPDATA"):
@@ -117,23 +128,17 @@ def _sibling_dir(configured: str, exe: str, base: str) -> list[Path]:
 
 def find_ytdlp(settings: "Settings | None" = None) -> str | None:
     configured = getattr(settings, "ytdlp_path", "") if settings else ""
-    sibling = getattr(settings, "ffmpeg_path", "") if settings else ""
-    return _search(configured, "yt-dlp", "yt-dlp.exe", _ytdlp_dirs() + _sibling_dir(sibling, "ffmpeg.exe", "ffmpeg"))
+    sibling = _sibling_dir(getattr(settings, "ffmpeg_path", "") if settings else "", "ffmpeg.exe", "ffmpeg")
+    return _search(configured, "yt-dlp", "yt-dlp.exe", _ytdlp_own_dirs() + sibling, _ytdlp_guess_dirs())
 
 
 def find_ffmpeg(settings: "Settings | None" = None) -> str | None:
     configured = getattr(settings, "ffmpeg_path", "") if settings else ""
-    sibling = getattr(settings, "ytdlp_path", "") if settings else ""
-    return _search(configured, "ffmpeg", "ffmpeg.exe", _ffmpeg_dirs() + _sibling_dir(sibling, "yt-dlp.exe", "yt-dlp"))
+    sibling = _sibling_dir(getattr(settings, "ytdlp_path", "") if settings else "", "yt-dlp.exe", "yt-dlp")
+    return _search(configured, "ffmpeg", "ffmpeg.exe", _ffmpeg_own_dirs() + sibling, _ffmpeg_guess_dirs())
 
 
-def _search(configured: str, base: str, exe: str, dirs: list[Path]) -> str | None:
-    """Resolve a tool: the configured path, then the likely folders, then the
-    PATH, then (only if still missing) the PATH as the registry records it now
-    and winget's own package folders."""
-    found = _as_exe(configured, exe)
-    if found:
-        return found
+def _first_in(dirs: list[Path], exe: str) -> str | None:
     seen: set[str] = set()
     for d in dirs:
         key = os.path.normcase(str(d))
@@ -143,14 +148,23 @@ def _search(configured: str, base: str, exe: str, dirs: list[Path]) -> str | Non
         candidate = os.path.join(str(d), exe)
         if os.path.isfile(candidate):
             return candidate
+    return None
+
+
+def _search(configured: str, base: str, exe: str, own_dirs: list[Path], guess_dirs: list[Path]) -> str | None:
+    """Resolve a tool, in order: the configured path; Downpour's own folders;
+    the PATH; common install folders; and last, only if still missing, the PATH
+    as the registry records it now and winget's own package folders. Deliberate
+    locations and the PATH come before the guessed folders, so a tool the user
+    installed is never shadowed by a stray copy."""
+    found = _as_exe(configured, exe) or _first_in(own_dirs, exe)
+    if found:
+        return found
     on_path = shutil.which(base) or shutil.which(exe)
     if on_path:
         return on_path
-    for d in _registry_path_dirs() + _winget_package_dirs(base):
-        candidate = os.path.join(str(d), exe)
-        if os.path.isfile(candidate):
-            return candidate
-    return None
+    late = guess_dirs + [Path(p) for p in _registry_path_dirs()] + _winget_package_dirs(base)
+    return _first_in(late, exe)
 
 
 def _registry_path_dirs() -> list[str]:
@@ -1037,6 +1051,10 @@ class MediaTask:
             _remove(tmp)
             said = (out or "").strip().splitlines()
             raise MediaError(said[-1] if said else "FFmpeg gave no reason")
+        try:
+            shutil.copystat(final_path, tmp)  # keep the finished file's date (yt-dlp's --mtime)
+        except OSError:
+            pass
         os.replace(tmp, final_path)
 
     def _complete(self, final_path: str) -> None:

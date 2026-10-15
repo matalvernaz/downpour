@@ -56,25 +56,37 @@ def test_search_checks_dirs_in_order(tmp_path, no_ambient):
     first = _fake(tmp_path / "a" / "ffmpeg.exe")
     _fake(tmp_path / "b" / "ffmpeg.exe")
     dirs = [tmp_path / "a", tmp_path / "b"]
-    assert media._search("", "ffmpeg", "ffmpeg.exe", dirs) == str(first)
+    assert media._search("", "ffmpeg", "ffmpeg.exe", dirs, []) == str(first)
 
 
 def test_search_returns_none_when_nothing_matches(tmp_path, no_ambient):
-    assert media._search("", "ffmpeg", "ffmpeg.exe", [tmp_path / "empty"]) is None
+    assert media._search("", "ffmpeg", "ffmpeg.exe", [tmp_path / "empty"], []) is None
 
 
-def test_ffmpeg_found_in_program_files(tmp_path, monkeypatch, no_ambient):
-    monkeypatch.setenv("ProgramFiles", str(tmp_path / "pf"))
-    # Keep a stray C:\ffmpeg on the test machine from answering first.
-    monkeypatch.setattr(media, "_ffmpeg_dirs",
-                        lambda: [Path(tmp_path / "pf") / "ffmpeg" / "bin"])
+def test_ffmpeg_found_in_a_guessed_folder(tmp_path, monkeypatch, no_ambient):
     exe = _fake(tmp_path / "pf" / "ffmpeg" / "bin" / "ffmpeg.exe")
+    # Keep a stray C:\ffmpeg on the test machine from answering first.
+    monkeypatch.setattr(media, "_ffmpeg_guess_dirs", lambda: [tmp_path / "pf" / "ffmpeg" / "bin"])
     assert media.find_ffmpeg(Settings()) == str(exe)
 
 
+def test_path_beats_a_guessed_folder(tmp_path, monkeypatch):
+    # A tool on the PATH must win over a stray copy in a common install folder.
+    on_path = _fake(tmp_path / "real" / "ffmpeg.exe")
+    _fake(tmp_path / "stray" / "ffmpeg.exe")
+    monkeypatch.setattr(media, "_ffmpeg_own_dirs", list)
+    monkeypatch.setattr(media, "_ffmpeg_guess_dirs", lambda: [tmp_path / "stray"])
+    monkeypatch.setattr(media, "_registry_path_dirs", lambda: [])
+    monkeypatch.setattr(media, "_winget_package_dirs", lambda base: [])
+    monkeypatch.setattr(media.shutil, "which", lambda name: str(on_path) if name in ("ffmpeg", "ffmpeg.exe") else None)
+    assert media.find_ffmpeg(Settings()) == str(on_path)
+
+
 def test_each_tool_is_found_beside_the_other(tmp_path, monkeypatch, no_ambient):
-    monkeypatch.setattr(media, "_ffmpeg_dirs", list)  # no other ffmpeg locations
-    monkeypatch.setattr(media, "_ytdlp_dirs", list)
+    monkeypatch.setattr(media, "_ffmpeg_own_dirs", list)  # no other ffmpeg locations
+    monkeypatch.setattr(media, "_ytdlp_own_dirs", list)
+    monkeypatch.setattr(media, "_ffmpeg_guess_dirs", list)
+    monkeypatch.setattr(media, "_ytdlp_guess_dirs", list)
     folder = tmp_path / "side"
     yt = _fake(folder / "yt-dlp.exe")
     ff = _fake(folder / "ffmpeg.exe")
@@ -82,13 +94,13 @@ def test_each_tool_is_found_beside_the_other(tmp_path, monkeypatch, no_ambient):
     assert media.find_ytdlp(Settings(ffmpeg_path=str(ff))) == str(yt)
 
 
-def test_dir_lists_include_the_usual_places(tmp_path, monkeypatch):
+def test_dir_lists_include_the_usual_places(monkeypatch):
     monkeypatch.setenv("ProgramFiles", r"C:\Program Files")
-    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
-    ffmpeg = [str(d).lower() for d in media._ffmpeg_dirs()]
-    ytdlp = [str(d).lower() for d in media._ytdlp_dirs()]
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\x\AppData\Local")
+    ffmpeg = [str(d).lower() for d in media._ffmpeg_guess_dirs()]
+    ytdlp = [str(d).lower() for d in media._ytdlp_guess_dirs()]
     assert any(d.endswith(r"\ffmpeg\bin") for d in ffmpeg)
-    assert r"c:\program files\ffmpeg\bin".lower() in ffmpeg
+    assert r"c:\program files\ffmpeg\bin" in ffmpeg
     assert any("winget" in d for d in ytdlp)
 
 

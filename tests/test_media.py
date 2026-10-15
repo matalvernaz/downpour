@@ -111,6 +111,22 @@ def test_audio_bitrate_reencodes_only_the_audio(server, make_engine, tmp_path):
     assert source_abr == 0 or result_abr < source_abr
 
 
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="FFmpeg is not installed")
+def test_reencoding_audio_keeps_the_file_date(make_engine, tmp_path):
+    clip = tmp_path / "clip.mp4"
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+         "-f", "lavfi", "-i", "testsrc=duration=1:size=128x72:rate=10",
+         "-f", "lavfi", "-i", "sine=duration=1", "-c:v", "mpeg4", "-c:a", "aac", str(clip)],
+        check=True, timeout=60,
+    )
+    old = 1_000_000_000  # a fixed time well in the past
+    os.utime(clip, (old, old))
+    task = media.MediaTask(make_engine(), Download(url="x", kind="media", media_format="single"))
+    task._reencode_audio(str(clip), 32, shutil.which("ffmpeg"))
+    assert abs(os.path.getmtime(clip) - old) < 2  # the date survived os.replace
+
+
 def test_media_failure_is_reported(server, make_engine, tmp_path):
     url = server.add("/clips/missing.mp4", status=404)
     engine = make_engine()

@@ -71,7 +71,7 @@ class MediaDialog(wx.Dialog):
             default=wx.ID_OK,
         )
         self.SetSizer(sizer)
-        self.SetSize((720, 760))
+        self.SetSize((720, 810))
         self.CentreOnParent()
         default = next((i for i, c in enumerate(self.choices) if c.key == settings.media_format), 0)
         self.quality.SetSelection(default)
