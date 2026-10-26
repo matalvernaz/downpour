@@ -90,6 +90,7 @@ class Controller:
         self._dialog_busy = False
         self._exiting = False
         self._awaiting_refresh: int | None = None  # download waiting for a fresh link
+        self._awaiting_refresh_until = 0.0  # ...until this time, then the wait lapses
         self._handed_back: dict[str, float] = {}  # links given back to the browser, with expiry
         self._pass_next = 0.0  # until when the next offered download stays in the browser
         self.clipboard = ClipboardWatcher(self)
@@ -116,7 +117,9 @@ class Controller:
         if event == "completed" and dl is not None:
             self.feedback.announce("Download complete", dl.display_name(), sound="complete",
                                    spoken=f"Download complete: {dl.display_name()}")
-            if self.settings.show_complete_dialog:
+            # A when-done action means the user has walked away; a modal here would
+            # sit in ShowModal and hold the finish countdown behind it forever.
+            if self.settings.show_complete_dialog and self.settings.when_done == "nothing":
                 self._queue_dialog(lambda: self._complete_dialog(dl))
         elif event == "failed" and dl is not None:
             self.feedback.announce("Download failed", f"{dl.display_name()}: {dl.error}", sound="failed",
@@ -375,6 +378,7 @@ class Controller:
         browser hands over renews this one's link instead of starting again."""
         log.info("download %s: waiting for a fresh address from the browser", dl.id)
         self._awaiting_refresh = dl.id
+        self._awaiting_refresh_until = time.time() + 300  # a handshake, not a standing rule
         self.engine.pause([dl.id])
         forms.message(
             self._parent(),
@@ -384,8 +388,11 @@ class Controller:
         )
 
     def _refresh_match(self, fresh: Download) -> Download | None:
-        target = self.engine.get(self._awaiting_refresh) if self._awaiting_refresh else None
-        if target is None:
+        if not self._awaiting_refresh or time.time() > self._awaiting_refresh_until:
+            self._awaiting_refresh = None  # the user never completed the refresh; stop watching
+            return None
+        target = self.engine.get(self._awaiting_refresh)
+        if target is None or target.status == Status.COMPLETED:
             return None
         same_name = fresh.filename and fresh.filename.lower() == (target.filename or "").lower()
         same_size = fresh.size is not None and fresh.size == target.size

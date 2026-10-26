@@ -58,6 +58,16 @@ def load_key(create: bool = False) -> bytes | None:
         if len(key) >= 32:
             return key
         time.sleep(0.01)
+    # The file exists but never became a full key: it is corrupt (a kill during
+    # the first write, or a bad disk), and would otherwise block every start
+    # forever. Replace it rather than refuse to run.
+    if create:
+        key = secrets.token_bytes(32)
+        tmp = path.with_suffix(".new")
+        tmp.write_bytes(key)
+        tmp.replace(path)
+        log.warning("the pipe key at %s was too short to use; made a new one", path)
+        return key
     raise OSError(f"{path} is unreadable")
 
 

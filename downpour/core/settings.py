@@ -236,11 +236,16 @@ def from_dict(raw: dict) -> Settings:
         if key not in known:
             continue
         if key == "categories":
-            try:
-                value = [Category(**c) for c in value]
-            except TypeError:
-                log.warning("ignoring unreadable categories in the settings file")
-                continue
+            cat_fields = {f.name for f in fields(Category)}
+            cats = []
+            for c in value if isinstance(value, list) else []:
+                if not isinstance(c, dict):
+                    continue
+                try:  # skip keys this build doesn't know, so a newer file's extra field keeps the rest
+                    cats.append(Category(**{k: v for k, v in c.items() if k in cat_fields}))
+                except TypeError:
+                    log.warning("ignoring an unreadable category in the settings file")
+            value = cats
         default = getattr(s, key)
         if isinstance(default, bool) and not isinstance(value, bool):
             log.warning("ignoring setting %s: expected true or false, found %r", key, value)

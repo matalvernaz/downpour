@@ -172,6 +172,14 @@ def test_settings_differences_hide_the_proxy_address():
     assert not any("pw@" in c for c in changes)
 
 
+def test_a_future_category_field_does_not_wipe_saved_categories(isolated_home):
+    from dataclasses import asdict
+
+    base = asdict(settings_mod.default_categories()[0])
+    loaded = settings_mod.from_dict({"categories": [{**base, "name": "Keeper", "a_future_field": "x"}]})
+    assert [c.name for c in loaded.categories] == ["Keeper"]  # kept, not reverted to the defaults
+
+
 # -- the extension's log ----------------------------------------------------------
 
 
