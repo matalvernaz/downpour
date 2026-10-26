@@ -146,6 +146,14 @@ class HttpTask:
         self._log_start()
         try:
             first = self._prepare()
+            # Seed the checkpoint with the state just established: for a fresh
+            # download that is byte 0 (nothing on disk yet), for a resumed one
+            # the fsynced positions. A save before the first real checkpoint
+            # (e.g. the user reorders or edits the download in its first few
+            # seconds) then persists this durable state, never the live, not-
+            # yet-fsynced positions that would leave a silent gap after a crash.
+            with self._lock:
+                self.checkpointed = [s.to_list() for s in dl.segments]
             if first is not None:
                 self._transfer(*first)
             self._finish()
@@ -281,6 +289,13 @@ class HttpTask:
                 # A range request against an empty file can only fail; ask plainly.
                 resp, info = self._connect(None)
         assert info is not None
+        if info.ranged and info.total is None:
+            # A bounded range with no total (Content-Range ".../*"): its EOF would
+            # look like the end of the file and could leave a silently short file.
+            # Ask again with no range so the server sends the whole body (a 200).
+            log.info("download %s: the server gave a partial range but hid the total; re-requesting the whole file", dl.id)
+            self._discard(resp)
+            resp, info = self._connect(None)
         self._fetch_url = info.url
         size = info.total if info.ranged else info.length
         dl.size = size

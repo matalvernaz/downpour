@@ -91,6 +91,10 @@ class Controller:
         self._exiting = False
         self._awaiting_refresh: int | None = None  # download waiting for a fresh link
         self._awaiting_refresh_until = 0.0  # ...until this time, then the wait lapses
+        self._pending_offers: set[str] = set()  # URLs with a confirm dialog already open
+        self._modal_depth = 0  # modal dialogs open right now (menu dialogs, confirms, countdown)
+        self._exit_pending = False  # an exit was asked for while a modal was open
+        self._exit_then = None  # the when-done action to run after that deferred exit
         self._handed_back: dict[str, float] = {}  # links given back to the browser, with expiry
         self._pass_next = 0.0  # until when the next offered download stays in the browser
         self.clipboard = ClipboardWatcher(self)
@@ -278,7 +282,14 @@ class Controller:
     def _modal(self, dlg: wx.Dialog) -> int:
         wx.CallAfter(bring_to_front, dlg)
         log.debug("dialog opened: %s", dlg.GetTitle())
-        result = dlg.ShowModal()
+        self._modal_depth += 1
+        try:
+            result = dlg.ShowModal()
+        finally:
+            self._modal_depth -= 1
+            if self._modal_depth == 0 and self._exit_pending:
+                self._exit_pending = False
+                wx.CallAfter(self.exit, self._exit_then)  # run the exit we held back while this was open
         log.debug("dialog closed: %s (%s)", dlg.GetTitle(), {wx.ID_OK: "OK", wx.ID_CANCEL: "cancelled"}.get(result, result))
         return result
 
@@ -418,6 +429,10 @@ class Controller:
             self.feedback.say(f"Already in the list: {existing.display_name()}. Resuming.")
             return
         if interactive or self.settings.show_info_dialog:
+            if dl.url in self._pending_offers:  # a second offer of the same link before the first is confirmed
+                log.info("a confirm dialog for this address is already open; ignoring the duplicate offer")
+                return
+            self._pending_offers.add(dl.url)
             self._queue_dialog(lambda: self._confirm_download(dl, interactive=True))
         else:
             self.engine.add(dl, start=True, force=True)
@@ -425,18 +440,21 @@ class Controller:
             self.feedback.say(f"Downloading {dl.display_name()}")
 
     def _confirm_download(self, dl: Download, interactive: bool) -> None:
-        with DownloadInfoDialog(self._parent(), self.settings, dl) as dlg:
-            if self._modal(dlg) != wx.ID_OK:
-                return
-            choice = dlg.choice
-        start = choice == DownloadInfoDialog.START
-        log.info("new download confirmed: %s, %s", dl.display_name(), "start now" if start else "later")
         try:
-            self.engine.add(dl, start=start, force=start)
-        except ValueError as e:
-            forms.message(self._parent(), str(e), icon=wx.ICON_WARNING)
-            return
-        self.feedback.play("added")
+            with DownloadInfoDialog(self._parent(), self.settings, dl) as dlg:
+                if self._modal(dlg) != wx.ID_OK:
+                    return
+                choice = dlg.choice
+            start = choice == DownloadInfoDialog.START
+            log.info("new download confirmed: %s, %s", dl.display_name(), "start now" if start else "later")
+            try:
+                self.engine.add(dl, start=start, force=start)
+            except ValueError as e:
+                forms.message(self._parent(), str(e), icon=wx.ICON_WARNING)
+                return
+            self.feedback.play("added")
+        finally:
+            self._pending_offers.discard(dl.url)
 
     def _pick(self, downloads: list[Download], title: str = "Choose downloads") -> None:
         with LinkPickerDialog(self._parent(), self.settings, downloads, title=title) as dlg:
@@ -862,6 +880,14 @@ class Controller:
 
     def exit(self, then=None) -> None:
         if self._exiting:
+            return
+        if self._modal_depth > 0:
+            # Destroying the frame under an open modal (Options, Properties, a
+            # tray Exit or an external --quit while one is up) tears down the
+            # modal's parent beneath its own ShowModal loop. Wait for it to close.
+            log.info("exit requested while a dialog is open; deferring until it closes")
+            self._exit_pending = True
+            self._exit_then = then
             return
         log.info("exiting%s", " and then running the when-done action" if then else "")
         self._exiting = True

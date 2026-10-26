@@ -27,6 +27,7 @@ class FileSpec:
     fail_first: int = 0  # answer this many requests with 503 first
     status: int | None = None  # answer every request with this status
     max_range: int | None = None  # cap the bytes in one ranged reply
+    hide_total: bool = False  # answer ranged requests with Content-Range ".../*" (total unknown)
     max_conn: int | None = None  # concurrent requests allowed; the rest get 503
     refuse_status: int = 503
     drop_after: int | None = None  # cut one connection after this many bytes
@@ -130,7 +131,8 @@ class _Handler(BaseHTTPRequestHandler):
         if spec.last_modified:
             self.send_header("Last-Modified", spec.last_modified)
         if status == 206:
-            self.send_header("Content-Range", f"bytes {start}-{end - 1}/{len(data)}")
+            total = "*" if spec.hide_total else len(data)
+            self.send_header("Content-Range", f"bytes {start}-{end - 1}/{total}")
         if spec.disposition:
             self.send_header("Content-Disposition", spec.disposition)
         if spec.chunked:

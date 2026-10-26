@@ -41,19 +41,31 @@ class Store:
         secrets = {name: data.pop(name) for name in SECRET_FIELDS}
         if any(secrets.values()):
             data["sealed"] = winutil.seal(json.dumps(secrets).encode("utf-8"))
+        else:
+            carried = getattr(dl, "_sealed_carry", None)
+            if carried:  # the blob couldn't be unsealed when loaded; keep it rather than erase credentials
+                data["sealed"] = carried
         return json.dumps(data)
 
     @staticmethod
     def _decode(row_id: int, text: str) -> Download:
         data = json.loads(text)
         sealed = data.pop("sealed", None)
+        carried = None
         if sealed:
             try:
                 data.update(json.loads(winutil.unseal(sealed)))
             except (OSError, ValueError):
-                log.warning("could not unseal credentials for download %s", row_id)
+                # A transient DPAPI failure (e.g. the master key briefly
+                # unavailable) must not let the next save erase credentials
+                # that may unseal fine later: carry the blob through untouched.
+                log.warning("could not unseal credentials for download %s; keeping them sealed for next time", row_id)
+                carried = sealed
         data["id"] = row_id
-        return Download.from_dict(data)
+        dl = Download.from_dict(data)
+        if carried is not None:
+            dl._sealed_carry = carried
+        return dl
 
     def load_all(self) -> list[Download]:
         with self._lock:

@@ -59,6 +59,16 @@ def test_unknown_length_chunked(server, make_engine):
     assert dl.filename == "stream.zip"
 
 
+def test_capped_range_without_a_total_refetches_the_whole_file(server, make_engine):
+    # A server that caps the first range and hides the total (Content-Range
+    # "bytes 0-9999/*"): the capped EOF must not be read as the end of the file.
+    data = payload(50_000)
+    url = server.add("/capped", data, max_range=10_000, hide_total=True)
+    engine = make_engine()
+    dl = wait_for(engine, add(engine, url).id, Status.COMPLETED)
+    assert read(dl.path) == data  # the whole file, not a truncated 10 KB
+
+
 def test_empty_file(server, make_engine):
     url = server.add("/empty.txt", b"")
     engine = make_engine()
