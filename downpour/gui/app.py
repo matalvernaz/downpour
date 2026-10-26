@@ -970,6 +970,12 @@ def run(urls: list[str] | None = None, tray: bool = False, debug: bool = False) 
     logs.enable_crash_log()
     app = wx.App(False)
     app.SetAppName(APP_NAME)
+
+    def _session_ending(evt):
+        logs.mark_clean_exit()  # a log-off or reboot ends the run; it is not a crash
+        evt.Skip()
+
+    app.Bind(wx.EVT_END_SESSION, _session_ending)
     if settings.dark_mode and hasattr(app, "MSWEnableDarkMode"):
         try:
             app.MSWEnableDarkMode()
@@ -1000,5 +1006,6 @@ def run(urls: list[str] | None = None, tray: bool = False, debug: bool = False) 
     if after is not None:
         after()
     log.info("stopped")
+    logs.mark_clean_exit()
     logging.shutdown()
     return 0

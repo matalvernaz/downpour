@@ -53,6 +53,7 @@ MAX_BYTES = 5 * 1024 * 1024
 BACKUPS = 5
 SHARED_LIMIT = 1024 * 1024  # files that several processes append to
 CRASH_LOG = "crash.log"
+CLEAN_EXIT = "clean-exit"  # marker that the last run reached its shutdown (see mark_clean_exit)
 EXTENSION_LOG = "extension.log"
 
 # Query parameters whose values are credentials in signed or authenticated
@@ -208,19 +209,49 @@ def install_excepthooks(on_error: Callable[[BaseException], None] | None = None)
     sys.unraisablehook = unraisable_hook
 
 
+def _clean_exit_marker() -> Path:
+    return logs_dir() / CLEAN_EXIT
+
+
+def mark_clean_exit() -> None:
+    """Record that this run reached its shutdown. Windows can raise a handled
+    COM disconnect (RPC_E_DISCONNECTED, "Windows fatal exception: code
+    0x80010108") while it tears the process down at a normal exit, a log-off
+    or a reboot; the fault handler writes that to crash.log even though
+    nothing crashed. This marker lets the next start tell such teardown noise
+    from a run that really died, so the user is not warned of a crash that
+    did not happen."""
+    try:
+        _clean_exit_marker().write_text(datetime.now().strftime(DATE_FORMAT), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def enable_crash_log() -> None:
     """Have Python write every thread's stack to crash.log if the process
     dies in native code (wxWidgets, a DLL). A report left by the previous run
-    is kept as crash.log.1 and mentioned in the main log."""
+    is kept as crash.log.1. It is announced as a crash only when that run did
+    not reach its shutdown; a report written while Windows tore the process
+    down (see mark_clean_exit) is kept quietly instead of alarming the user
+    at every start."""
     global _crash_file
     if _crash_file is not None:
         return
+    marker = _clean_exit_marker()
+    ended_cleanly = marker.exists()
+    try:
+        marker.unlink()
+    except OSError:
+        pass
     path = logs_dir() / CRASH_LOG
     try:
         if path.stat().st_size > 0:
             old = path.with_name(CRASH_LOG + ".1")
             os.replace(path, old)
-            log.warning("an earlier run of Downpour crashed; its report is in %s", old)
+            if ended_cleanly:
+                log.debug("the previous run left a fault report written while shutting down; kept as %s", old)
+            else:
+                log.warning("an earlier run of Downpour crashed; its report is in %s", old)
     except OSError:
         pass
     try:

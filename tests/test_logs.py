@@ -121,6 +121,24 @@ def test_previous_crash_report_is_kept_and_mentioned(isolated_home, monkeypatch,
             logs._crash_file.close()
 
 
+def test_a_fault_report_after_a_clean_exit_is_not_called_a_crash(isolated_home, monkeypatch, caplog):
+    monkeypatch.setattr(logs.faulthandler, "enable", lambda *a, **k: None)
+    monkeypatch.setattr(logs, "_crash_file", None)
+    logs_folder = isolated_home / "logs"
+    logs_folder.mkdir(parents=True, exist_ok=True)
+    (logs_folder / logs.CRASH_LOG).write_text("Windows fatal exception: code 0x80010108\n", encoding="utf-8")
+    logs.mark_clean_exit()  # the previous run reached its shutdown
+    with caplog.at_level(logging.DEBUG):
+        logs.enable_crash_log()
+    try:
+        assert (logs_folder / (logs.CRASH_LOG + ".1")).exists()  # the report is still kept
+        assert "crashed" not in caplog.text  # but the user is not told a crash happened
+        assert not (logs_folder / logs.CLEAN_EXIT).exists()  # the marker is consumed, so the next start can warn
+    finally:
+        if logs._crash_file is not None:
+            logs._crash_file.close()
+
+
 def test_watchdog_reports_a_frozen_window_with_every_stack(caplog):
     dog = logs.Watchdog(lambda fn: None, timeout=0.2, interval=0.05)  # the "window" never runs anything
     with caplog.at_level(logging.WARNING):
