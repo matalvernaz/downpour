@@ -306,17 +306,21 @@ class Engine:
         self._emit("changed", dl)
         self._schedule()
 
-    def refresh_url(self, download_id: int, url: str) -> None:
+    def refresh_url(self, download_id: int, url: str, final_url: str = "") -> None:
         """Point a download at a new address (an expired link renewed), keeping
-        what is already downloaded."""
+        what is already downloaded. ``final_url`` is where the browser's
+        request for it ended up, when the browser renewed it."""
         if urlsplit(url).scheme.lower() not in SCHEMES:
             raise ValueError("Only http and https addresses can be downloaded")
+        if urlsplit(final_url).scheme.lower() not in SCHEMES or final_url == url:
+            final_url = ""
         with self._lock:
             dl = self._downloads.get(download_id)
             if dl is None:
                 return
             log.info("download %s: new address %s (was %s)", download_id, redact_url(url), redact_url(dl.url))
             dl.url = url
+            dl.final_url = final_url
             # A renewed link may come from another server whose ETag differs
             # for the same file; resume on the size check alone this once.
             dl.etag = dl.last_modified = ""

@@ -37,6 +37,14 @@ The unit the extension hands over. Only `url` is required.
 | text        | link text, for links collected from a page                       |
 | incognito   | true when the download came from a private window                |
 
+Downpour keeps `url` as the download's address and tries `finalUrl` first.
+The browser has already requested both by the time it hands a download over,
+and either may work only once: some links carry a one-time token, and
+Dropbox's download addresses (the `dl.dropboxusercontent.com` targets of its
+share links) answer a single request. When the server refuses `finalUrl`,
+Downpour asks `url` again and follows its redirects to a fresh address. So
+send the link the page asked for in `url`, not the address it redirected to.
+
 Cookie objects carry the browser's own field names: `name`, `value`,
 `domain`, `path`, `secure`, `httpOnly`, `hostOnly`, and `expirationDate`
 (seconds since the epoch, absent for session cookies).

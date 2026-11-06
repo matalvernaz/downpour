@@ -21,6 +21,19 @@ def test_sentence_punctuation_is_not_part_of_a_link():
     assert dialogs.urls_in("Get it at https://e.com/f.iso, then https://e.com/f.iso.") == ["https://e.com/f.iso"]
 
 
+def test_browser_items_keep_the_link_and_try_the_final_address_first():
+    link = "https://www.dropbox.com/s/abc/game.zip?dl=1"
+    final = "https://uc1.dl.dropboxusercontent.com/cd/0/get/X/file?dl=1"
+    dl = dialogs.item_to_download({"url": link, "finalUrl": final})
+    assert (dl.url, dl.final_url) == (link, final)
+    # Firefox sends no finalUrl, nor do links collected from a page.
+    assert dialogs.item_to_download({"url": final}).final_url == ""
+    assert dialogs.item_to_download({"url": link, "finalUrl": link}).final_url == ""
+    odd = dialogs.item_to_download({"url": "blob:https://e.com/1", "finalUrl": final})
+    assert (odd.url, odd.final_url) == (final, "")
+    assert dialogs.item_to_download({"url": link, "finalUrl": "data:,x"}).final_url == ""
+
+
 def test_server_date_parsing_and_setting(tmp_path):
     from downpour.core import winutil
 

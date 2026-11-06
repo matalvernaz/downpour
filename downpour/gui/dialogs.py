@@ -61,11 +61,24 @@ def clipboard_text() -> str:
         wx.TheClipboard.Close()
 
 
+def _is_web(url: str) -> bool:
+    return urlsplit(url).scheme.lower() in ("http", "https")
+
+
 def item_to_download(item: dict) -> Download:
-    """Build a Download from a browser-extension item (see docs/browser-protocol.md)."""
+    """Build a Download from a browser-extension item (see docs/browser-protocol.md).
+    The address is the link the browser started from; where it was finally
+    sent, after redirects, is kept to be tried first."""
     size = item.get("size")
+    url = str(item.get("url") or "")
+    final_url = str(item.get("finalUrl") or "")
+    if not _is_web(url):  # no usable link: the browser's address is all there is
+        url, final_url = final_url or url, ""
+    elif not _is_web(final_url) or final_url == url:
+        final_url = ""
     return Download(
-        url=str(item.get("finalUrl") or item.get("url") or ""),
+        url=url,
+        final_url=final_url,
         filename=filenames.sanitize(item["filename"]) if item.get("filename") else "",
         filename_fixed=bool(item.get("filename")),
         referrer=str(item.get("referrer") or ""),
@@ -552,6 +565,8 @@ def details_text(dl: Download, running: bool) -> str:
     if dl.directory:
         lines.append(f"Folder: {dl.directory}")
     lines.append(f"Address: {net.safe_url(dl.url)}")
+    if dl.final_url:
+        lines.append(f"Browser's address, tried first: {net.safe_url(dl.final_url)}")
     if dl.referrer:
         lines.append(f"Referrer: {net.safe_url(dl.referrer)}")
     if dl.mime:

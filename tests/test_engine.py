@@ -364,6 +364,75 @@ def test_refresh_address_keeps_progress(server, make_engine):
     assert all((r.start or 0) > 0 for r in server.requests_for("/new-link.bin"))
 
 
+def test_used_up_browser_address_falls_back_to_the_link(server, make_engine):
+    # Dropbox: a share link redirects every request to a fresh download
+    # address that answers once, and the browser used its own before it
+    # handed the download over.
+    data = payload(2 * 1024 * 1024)
+    link = server.add("/s/share.zip", data, mint_once=True, delay=0.002)
+    used = server.add("/cd/0/get/browser", data, once=True, used=True)
+    engine = make_engine(max_connections=4)
+    dl = add(engine, link, final_url=used, size=len(data), mime="application/binary")
+    done = wait_for(engine, dl.id, Status.COMPLETED)
+    assert read(done.path) == data
+    assert done.final_url == ""  # refused once, so never asked again
+    assert len(server.requests_for("/cd/0/get/browser")) == 1
+
+
+def test_browser_address_is_tried_before_the_link(server, make_engine):
+    # A one-time link: the browser used its token, but where it led still works.
+    data = payload(300_000)
+    link = server.add("/one-time-token", status=410)
+    direct = server.add("/files/report.pdf", data)
+    engine = make_engine()
+    done = wait_for(engine, add(engine, link, final_url=direct).id, Status.COMPLETED)
+    assert read(done.path) == data
+    assert server.requests_for("/one-time-token") == []
+    assert done.final_url == direct
+
+
+@pytest.mark.parametrize("size", [None, 1000])
+def test_link_that_now_gives_a_web_page_is_not_saved(server, make_engine, size):
+    # The browser's address is refused and the link answers with an "expired"
+    # page: that page must not be saved as the zip (caught by its type, and by
+    # its size when the browser gave one).
+    link = server.add("/expired", b"<html><body>This link has expired</body></html>", content_type="text/html")
+    used = server.add("/cd/0/get/used", payload(1000), once=True, used=True)
+    engine = make_engine()
+    dl = add(engine, link, final_url=used, size=size, mime="application/zip", filename="game.zip", filename_fixed=True)
+    failed = wait_for(engine, dl.id, Status.FAILED)
+    assert "403" in failed.error
+    assert len(server.requests_for("/expired")) == 1
+
+
+def test_resume_after_the_browser_address_expired(server, make_engine):
+    data = payload(1024 * 1024)
+    direct = server.add("/cdn/signed.bin", data, delay=0.02, etag='"v1"')
+    fresh = server.add("/cdn/fresh.bin", data, etag='"v1"')
+    link = server.add("/files/link.bin", redirect_to=fresh)
+    engine = make_engine(max_connections=2)
+    dl = add(engine, link, final_url=direct)
+    wait_until(lambda: dl.downloaded > 200_000, message="some progress")
+    engine.pause([dl.id])
+    wait_for(engine, dl.id, Status.PAUSED)
+    server.files["/cdn/signed.bin"].status = 403  # its signature expired
+    engine.start([dl.id])
+    done = wait_for(engine, dl.id, Status.COMPLETED)
+    assert read(done.path) == data
+    assert done.final_url == ""
+    assert server.requests_for("/files/link.bin")
+    assert all((r.start or 0) > 0 for r in server.requests_for("/cdn/fresh.bin"))
+
+
+def test_refresh_address_replaces_the_browser_address(make_engine):
+    engine = make_engine()
+    dl = engine.add(Download(url="https://e.com/old", final_url="https://cdn.e.com/old"), start=False)
+    engine.refresh_url(dl.id, "https://e.com/new")
+    assert engine.get(dl.id).final_url == ""
+    engine.refresh_url(dl.id, "https://e.com/newer", "https://cdn.e.com/newer")
+    assert engine.get(dl.id).final_url == "https://cdn.e.com/newer"
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="NTFS alternate data streams")
 def test_mark_of_the_web(server, make_engine):
     url = server.add("/motw.exe", payload(1000))

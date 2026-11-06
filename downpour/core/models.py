@@ -53,6 +53,12 @@ class Download:
     directory: str = ""
     referrer: str = ""
     page_url: str = ""
+    # For a download taken from the browser: where the browser's request for
+    # url ended up after redirects, when that differs from url. It is tried
+    # first, because some links work only once and the browser has used them.
+    # url is the fallback, because some redirect targets work only once too
+    # (Dropbox's) or expire. Cleared when the server refuses it.
+    final_url: str = ""
     description: str = ""
     size: int | None = None
     downloaded: int = 0

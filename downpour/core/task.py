@@ -97,7 +97,9 @@ class HttpTask:
         self._lock = threading.Lock()  # segments, file writes, counters
         self._fh = None
         self._opener = None
-        self._fetch_url = dl.url
+        # The address to ask: where the link last led, or the browser's own
+        # address at first. The link itself (dl.url) is the fallback.
+        self._fetch_url = dl.final_url or dl.url
         self._responses: set = set()
         self._workers: list[threading.Thread] = []
         self._limiter = RateLimiter(dl.speed_limit)
@@ -190,6 +192,8 @@ class HttpTask:
             format_size(dl.size) if dl.size is not None else "unknown size", self._connection_limit(),
             f"limited to {format_speed(dl.speed_limit)}" if dl.speed_limit else "no speed limit of its own",
         )
+        if dl.final_url:
+            log.info("download %s: trying the browser's address first: %s", dl.id, redact_url(dl.final_url))
         log.debug(
             "download %s: %s, %s, sign-in %s, %s, checksum %s, user agent %s, proxy %s, timeout %s s, %d retries",
             dl.id, summarize_cookies(dl.cookies),
@@ -647,22 +651,36 @@ class HttpTask:
     # -- I/O helpers ----------------------------------------------------------
 
     def _connect(self, start: int | None, if_range: str = ""):
-        """Open the first connection, retrying transient failures."""
+        """Open the first connection, retrying transient failures. When an
+        address other than the link itself is refused (the browser's own
+        address, or where the link led last time), ask the link again."""
         dl = self.dl
         settings = self.engine.settings
+        refused: net.HttpError | None = None
         while True:
             if self._stop.is_set():
                 raise Stopped()
+            url = self._fetch_url
             try:
                 resp, info = net.open_range(
-                    self._opener, dl.url, start=start,
+                    self._opener, url, start=start,
                     user_agent=dl.user_agent or settings.user_agent,
                     referrer=dl.referrer, headers=dl.headers, timeout=settings.timeout,
                     if_range=if_range,
                 )
             except net.HttpError as e:
                 if not e.transient:
-                    raise
+                    if url == dl.url:
+                        raise
+                    # Dropbox's download addresses work once, and the browser
+                    # used this one before it handed the download over.
+                    log.info("download %s: the server refused %s (%s); asking the link again", dl.id,
+                             "the browser's address" if url == dl.final_url else "the address the link led to",
+                             net.describe(e))
+                    refused = e
+                    self._fetch_url = dl.url
+                    dl.final_url = ""  # never ask it again, not even on a later resume
+                    continue
                 self._note_failure(e)
             except net.NETWORK_ERRORS as e:
                 if self._stop.is_set():
@@ -676,6 +694,9 @@ class HttpTask:
                 if self._stop.is_set():
                     self._discard(resp)
                     raise Stopped()
+                if refused is not None and not self._same_file(info):
+                    self._discard(resp)
+                    raise refused
                 return resp, info
             if self._failures > settings.max_retries:
                 raise DownloadError(
@@ -683,6 +704,23 @@ class HttpTask:
                 )
             if self._stop.wait(backoff(self._failures)):
                 raise Stopped()
+
+    def _same_file(self, info: net.ResponseInfo) -> bool:
+        """After a refused address, is the link's answer still the file? Not a
+        sign-in or "link expired" page, nor, before any byte is saved, a file
+        of another size than the browser reported. (Once bytes are saved, a
+        new size means the file changed, and the download starts over as
+        usual.)"""
+        dl = self.dl
+        html = info.mime.lower().startswith(("text/html", "application/xhtml"))
+        if html and not dl.mime.lower().startswith(("text/html", "application/xhtml")):
+            log.info("download %s: the link now gives a web page (%s), not the file", dl.id, info.mime)
+            return False
+        size = info.total if info.ranged else info.length
+        if not dl.downloaded and dl.size is not None and size is not None and size != dl.size:
+            log.info("download %s: the link now gives a different file (%s bytes, not %s)", dl.id, size, dl.size)
+            return False
+        return True
 
     def _open_file(self, create: bool, size: int | None = None) -> None:
         path = self.dl.part_path

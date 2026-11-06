@@ -211,12 +211,14 @@ class Controller:
         download?" is the commonest question there is."""
         accept, reason = self._capture_decision(item)
         url = str(item.get("finalUrl") or item.get("url") or "")
+        link = str(item.get("url") or "")
+        source = redact_url(url) if link in ("", url) else f"{redact_url(url)} (the link was {redact_url(link)})"
         size = item.get("size") if isinstance(item.get("size"), int) and item["size"] >= 0 else None
         log.info(
             "browser offered %s (%s, %s, %s) from %s: %s, %s",
             item.get("filename") or filenames.from_url(url), f"{size} bytes" if size is not None else "size unknown",
             item.get("mime") or "no type", summarize_cookies(item.get("cookies") if isinstance(item.get("cookies"), list) else None),
-            redact_url(url), "taking it" if accept else "leaving it to the browser", reason,
+            source, "taking it" if accept else "leaving it to the browser", reason,
         )
         return accept
 
@@ -418,7 +420,7 @@ class Controller:
             self._awaiting_refresh = None
             target.cookies = dl.cookies or target.cookies
             target.referrer = dl.referrer or target.referrer
-            self.engine.refresh_url(target.id, dl.url)
+            self.engine.refresh_url(target.id, dl.url, dl.final_url)
             self.engine.start([target.id])
             self.feedback.say(f"New address received. Resuming {target.display_name()}")
             return

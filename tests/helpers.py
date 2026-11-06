@@ -32,6 +32,9 @@ class FileSpec:
     refuse_status: int = 503
     drop_after: int | None = None  # cut one connection after this many bytes
     redirect_to: str | None = None
+    once: bool = False  # answer one request, then 403 (a Dropbox download address)
+    mint_once: bool = False  # redirect every request to a fresh `once` copy (a Dropbox share link)
+    used: bool = False  # a request has been answered
     empty_ranges: bool = False  # answer ranged requests after the first with no bytes
     etag: str | None = None  # sent as ETag; an If-Range that differs gets the whole file
     last_modified: str | None = "Sat, 03 Oct 2026 07:09:38 GMT"  # sent as Last-Modified
@@ -63,6 +66,14 @@ class _Handler(BaseHTTPRequestHandler):
             spec = state.files.get(path)
         if spec is None:
             return self._plain(404)
+        if spec.mint_once:
+            with state.lock:
+                fresh = f"{path}/copy-{len(state.files)}"
+                state.files[fresh] = FileSpec(
+                    data=spec.data, once=True, content_type=spec.content_type,
+                    disposition=spec.disposition, etag=spec.etag, delay=spec.delay,
+                )
+            spec = FileSpec(data=b"", redirect_to=state.url(fresh))
         if spec.redirect_to:
             self.send_response(302)
             self.send_header("Location", spec.redirect_to)
@@ -73,10 +84,13 @@ class _Handler(BaseHTTPRequestHandler):
             return self._plain(spec.status)
         refuse = None
         with state.lock:
-            if spec.fail_first > 0:
+            if spec.once and spec.used:
+                refuse = 403
+            elif spec.fail_first > 0:
                 spec.fail_first -= 1
                 refuse = 503
             else:
+                spec.used = True
                 state.active[path] = state.active.get(path, 0) + 1
                 if spec.max_conn and state.active[path] > spec.max_conn:
                     state.active[path] -= 1
