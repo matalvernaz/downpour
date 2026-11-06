@@ -393,6 +393,59 @@ api.webRequest.onBeforeRequest.addListener(rememberRequest, {
 });
 
 // ---------------------------------------------------------------------------
+// Redirects. Chromium reports a download's link as url and where it ended up
+// as finalUrl. Firefox reports only where it ended up, and some of those
+// addresses work once: a Dropbox share link redirects to a download address
+// that answers a single request, which the browser has already made. So on
+// Firefox the extension remembers recent redirects and offers the link the
+// page asked for as well (see docs/browser-protocol.md). Like the form
+// record, this is short-lived and only ever holds addresses.
+
+const recentRedirects = new Map(); // target without #fragment -> { from, seen }
+
+function rememberRedirect(details) {
+  if (!isWebUrl(details.url) || !isWebUrl(details.redirectUrl)) return;
+  const now = Date.now();
+  const key = withoutHash(details.redirectUrl);
+  recentRedirects.delete(key); // re-insert so the map stays oldest first
+  recentRedirects.set(key, { from: details.url, seen: now });
+  for (const [url, step] of recentRedirects) {
+    if (now - step.seen <= POST_MEMORY_MS && recentRedirects.size <= POST_MEMORY_SIZE) break;
+    recentRedirects.delete(url);
+  }
+}
+
+// Where a chain of recent redirects that ended at `url` started, or `url`.
+function redirectedFrom(url) {
+  let current = url;
+  const seen = new Set();
+  for (;;) {
+    const key = withoutHash(current);
+    const step = recentRedirects.get(key);
+    if (!step || seen.has(key) || Date.now() - step.seen > POST_MEMORY_MS) return current;
+    seen.add(key);
+    current = step.from;
+  }
+}
+
+// A Firefox download with the link it came from as url and the address the
+// browser fetched as finalUrl, as Chromium reports them. A link that was a
+// form submission is left out, since Downpour can only repeat a GET.
+function withLink(item) {
+  if (CAN_HOLD || item.finalUrl || !isWebUrl(item.url)) return item;
+  const link = redirectedFrom(item.url);
+  if (link === item.url || wasPosted(link)) return item;
+  return { ...item, url: link, finalUrl: item.url };
+}
+
+if (!CAN_HOLD) {
+  api.webRequest.onBeforeRedirect.addListener(rememberRedirect, {
+    urls: ["<all_urls>"],
+    types: ["main_frame", "sub_frame"],
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Media the page plays. Web players often stream from a private address the
 // page only gets once you are signed in, so the page's own address is no use
 // to yt-dlp. The extension notes every whole audio or video file an audio or
@@ -773,13 +826,15 @@ async function offerDownload(item, release) {
       return;
     }
     diag.info(`${describeItem(item)}: offering it to Downpour`);
+    if (item.finalUrl && item.finalUrl !== item.url) diag.debug(`download ${item.id}: the link was ${redactUrl(item.url)}`);
     let current = item;
     if (!holding) {
-      current = await waitForFirstByte(item.id);
-      if (!current) {
+      const fresh = await waitForFirstByte(item.id);
+      if (!fresh) {
         diag.info(`download ${item.id}: finished, failed or sent nothing within ${FIRST_BYTE_WAIT_MS / 1000} s, so the browser keeps it`);
         return;
       }
+      current = { ...fresh, url: item.url, finalUrl: item.finalUrl }; // keep the link withLink found
     }
     await markHeld(item.id);
     paused = await tryPause(item.id);
@@ -820,7 +875,8 @@ if (CAN_HOLD) {
     return true; // suggest() will be called asynchronously
   });
 } else {
-  api.downloads.onCreated.addListener((item) => {
+  api.downloads.onCreated.addListener((created) => {
+    const item = withLink(created);
     const skip = skipReason(item);
     if (skip) {
       diag.debug(`${describeItem(item)}: not offered, ${skip}`);
