@@ -603,7 +603,7 @@ async function releaseOrphans() {
     if (held.has(id)) continue;
     await api.storage.session.remove(key);
     const item = await findDownload(id);
-    if (item && item.paused) {
+    if (item && item.paused && item.canResume) {
       diag.info(`download ${id}: was left paused by an earlier copy of this script; resuming it`);
       await resumeQuietly(id);
     }
@@ -707,6 +707,15 @@ async function offer(item) {
   }
 }
 
+// Can the browser's copy still finish? Not just "paused": Chromium keeps
+// paused true on a download that was paused and then cancelled (state
+// interrupted, error USER_CANCELED, cannot resume). Firefox pauses by
+// cancelling and keeping the partial file, so a paused Firefox download is
+// interrupted too, but can resume; its cancel deletes that file.
+function stillAlive(item) {
+  return Boolean(item) && (item.state === "in_progress" || Boolean(item.paused && item.canResume));
+}
+
 // Downpour took the download: cancel the browser's copy and drop it from the
 // download list. False if the browser's copy is somehow still alive. A
 // download the browser is still setting up can take a moment to accept the
@@ -720,10 +729,10 @@ async function takeOver(id) {
       diag.debug(`download ${id}: cancel attempt ${attempt} failed: ${errorText(error)}`);
     }
     item = await findDownload(id);
-    if (!item || !(item.paused || item.state === "in_progress")) break;
+    if (!stillAlive(item)) break;
     await sleep(250 * attempt);
   }
-  if (item && (item.paused || item.state === "in_progress")) {
+  if (stillAlive(item)) {
     diag.warn(
       `download ${id}: the browser's copy is still alive after cancelling, so it keeps it ` +
         `(state ${item.state}, paused ${item.paused}, can resume ${item.canResume}, error ${item.error || "none"})`
