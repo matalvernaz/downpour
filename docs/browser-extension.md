@@ -118,6 +118,32 @@ Notes:
 - The extension already declares that it collects no data, which Mozilla
   requires of new extensions.
 
+### Updates for Firefox users
+
+From version 0.1.4 the add-on names an update address
+(`browser_specific_settings.gecko.update_url`): the file
+`updates/firefox.json` in this repository, as served from the main branch.
+Firefox asks it about once a day and installs a newer signed version by
+itself. Earlier versions have no update address, so their users add 0.1.4 or
+later by hand once (run the setup, or open the `.xpi`).
+
+To release a new Firefox version:
+
+1. Raise `"version"` in `extension/manifest.json` and sign it as above.
+2. Copy the signed `.xpi` over `installer/firefox/downpour-firefox.xpi`, so
+   the setup bundles it.
+3. Run `python tools/firefox_update.py vX.Y.Z` with the tag the Downpour
+   release is about to get. It adds the version to `updates/firefox.json`,
+   linking to the `.xpi` as committed under that tag, with its SHA-256.
+4. Commit, then push the tag before main (`git push origin vX.Y.Z`, then
+   `git push origin main`), so the list never names a file GitHub cannot
+   serve yet.
+
+A test checks that the newest entry matches the bundled `.xpi`. Every signed
+copy keeps the update address for good: never move `updates/firefox.json`,
+rename the main branch or make the repository private, or Firefox users stay
+on their version until they add a new one by hand.
+
 ## Using it
 
 - Downloads: while Capture downloads is checked in the Downpour panel, each

@@ -122,6 +122,39 @@ def test_manifest_shape():
     assert m["browser_specific_settings"]["gecko"]["data_collection_permissions"] == {"required": ["none"]}
 
 
+def test_firefox_update_list_matches_the_bundled_add_on():
+    # Firefox asks gecko.update_url for newer versions and checks the hash, so
+    # the newest entry must be exactly the add-on the setup bundles.
+    sys.path.insert(0, str(ROOT / "tools"))
+    import firefox_update
+
+    assert manifest()["browser_specific_settings"]["gecko"]["update_url"] == firefox_update.UPDATE_URL
+    updates = firefox_update.entries(firefox_update.load())
+    if not updates:
+        pytest.skip("no Firefox release with an update address yet")
+    newest = max(updates, key=lambda u: firefox_update.version_key(u["version"]))
+    assert newest["version"] == firefox_update.xpi_version()
+    assert newest["update_hash"] == "sha256:" + firefox_update.sha256()
+    assert re.fullmatch(
+        r"https://raw\.githubusercontent\.com/matalvernaz/downpour/v\d+\.\d+\.\d+/installer/firefox/downpour-firefox\.xpi",
+        newest["update_link"],
+    )
+
+
+def test_firefox_update_entry_replaces_its_own_version(tmp_path, monkeypatch):
+    sys.path.insert(0, str(ROOT / "tools"))
+    import firefox_update
+
+    monkeypatch.setattr(firefox_update, "UPDATES", tmp_path / "firefox.json")
+    first = firefox_update.add("v9.9.8")
+    (tmp_path / "firefox.json").write_text(json.dumps(first), encoding="utf-8")
+    second = firefox_update.add("v9.9.9")
+    updates = firefox_update.entries(second)
+    assert len(updates) == 1 and updates[0]["update_link"].split("/")[5] == "v9.9.9"
+    with pytest.raises(ValueError):
+        firefox_update.add("main")
+
+
 def test_manifest_files_exist_and_icons_have_their_sizes():
     m = manifest()
     for name in (m["background"]["service_worker"], m["action"]["default_popup"]):
