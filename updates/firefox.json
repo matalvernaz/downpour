@@ -1,0 +1,13 @@
+{
+  "addons": {
+    "downpour@matalvernaz.github.io": {
+      "updates": [
+        {
+          "version": "0.1.4",
+          "update_link": "https://raw.githubusercontent.com/matalvernaz/downpour/v0.1.5/installer/firefox/downpour-firefox.xpi",
+          "update_hash": "sha256:77d254fee794c7599f54735d0fadcc0dfe5d48fffcc0190eb0304d154500d185"
+        }
+      ]
+    }
+  }
+}
